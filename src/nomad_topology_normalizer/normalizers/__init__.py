@@ -8,7 +8,7 @@ class NewNormalizerEntryPoint(NormalizerEntryPoint):
     def load(self):
         from nomad_topology_normalizer.normalizers.normalizer import NewNormalizer
 
-        return NewNormalizer(**self.dict())
+        return NewNormalizer(**self.model_dump())
 
 
 normalizer_entry_point = NewNormalizerEntryPoint(
