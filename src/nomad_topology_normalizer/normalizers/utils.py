@@ -1,9 +1,9 @@
-from typing import Iterable
-import requests
-import time
-import re
 import random
+import re
+import time
+from collections.abc import Iterable
 
+import requests
 
 PUB_CHEM_PUG_PATH = 'https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound'
 CAS_API_PATH = 'https://commonchemistry.cas.org/api'

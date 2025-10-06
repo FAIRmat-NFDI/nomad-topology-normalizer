@@ -6,9 +6,6 @@ if TYPE_CHECKING:
     from nomad.datamodel.datamodel import (
         EntryArchive,
     )
-    from structlog.stdlib import (
-        BoundLogger,
-    )
 
 import json
 import pathlib
@@ -29,7 +26,6 @@ from matid.classification.classifications import (
 )
 from matid.clustering import SBC, Cluster
 from matid.symmetry.symmetryanalyzer import SymmetryAnalyzer
-
 from nomad import atomutils, utils
 from nomad.config import config
 from nomad.datamodel.datamodel import EntryArchive
@@ -314,14 +310,13 @@ class TopologyNormalizer:
                     add_system(system, topology, parent)
                     add_group(group.atoms_group, system)
                     old_labels.append(instance_indices)
+                elif len(old_labels[0]) == len(instance_indices):
+                    old_labels.append(instance_indices)
                 else:
-                    if len(old_labels[0]) == len(instance_indices):
-                        old_labels.append(instance_indices)
-                    else:
-                        self.logger.warn(
-                            'the topology contains entries with the same label but with '
-                            'different number of atoms'
-                        )
+                    self.logger.warn(
+                        'the topology contains entries with the same label but with '
+                        'different number of atoms'
+                    )
 
         add_group(groups, original)
         active_orbital_states = self._extract_orbital()
