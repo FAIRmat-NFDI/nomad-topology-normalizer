@@ -1,17 +1,16 @@
 from nomad.config.models.plugins import NormalizerEntryPoint
-from pydantic import Field
 
 
-class NewNormalizerEntryPoint(NormalizerEntryPoint):
-    parameter: int = Field(0, description='Custom configuration parameter')
+class SystemNormalizerEntryPoint(NormalizerEntryPoint):
+    normalizer_level = 3
 
     def load(self):
-        from nomad_topology_normalizer.normalizers.normalizer import NewNormalizer
+        from nomad_topology_normalizer.normalizers.normalizer import SystemNormalizer
 
-        return NewNormalizer(**self.dict())
+        return SystemNormalizer(**self.dict())
 
 
-normalizer_entry_point = NewNormalizerEntryPoint(
-    name='NewNormalizer',
+system_normalizer_plugin = SystemNormalizerEntryPoint(
+    name='System ',
     description='New normalizer entry point configuration.',
 )
