@@ -35,6 +35,7 @@ from nomad.datamodel.results import (
     CoreHole,
     Material,
     Relation,
+    Results,
     System,
     structure_name_map,
 )
@@ -52,6 +53,7 @@ from nomad.normalizing.common import (
 
 if TYPE_CHECKING:
     from numpy.typing import NDArray
+from nomad.normalizing import Normalizer
 
 conventional_description: str = 'The conventional cell of the material from which the subsystem is constructed from.'
 subsystem_description: str = 'Automatically detected subsystem.'
@@ -191,19 +193,14 @@ ATTRIBUTE_MAP: dict[str, str] = {
 }
 
 
-class TopologyNormalizer:
-    """Handles the creation of topology information."""
+class TopologyNormalizer(Normalizer):
 
-    def __init__(self, entry_archive, repr_system, repr_symmetry, conv_atoms, logger):
-        self.entry_archive = entry_archive
-        self.repr_system = repr_system
-        self.repr_symmetry = repr_symmetry
-        self.structural_type = None
-        self.conv_atoms = conv_atoms
-        self.logger = logger
-        self.masses = atomutils.get_masses_from_computational_model(
-            entry_archive, repr_system=repr_system
-        )
+    def normalize(self, archive: 'EntryArchive', logger: 'BoundLogger') -> None:
+        super().normalize(archive, logger)
+        self.entry_archive = archive
+
+        if self.entry_archive.results and self.entry_archive.results.material:
+            self.topology(self.entry_archive.results.material)
 
     def topology(self, material) -> list[System] | None:
         """Returns a dictionary that contains all of the topologies mapped by id."""
@@ -216,9 +213,6 @@ class TopologyNormalizer:
         topology_calc = self.topology_calculation()
         if topology_calc:
             return topology_calc
-        topology_calc_v2 = self.topology_calculation_2()
-        if topology_calc_v2:
-            return topology_calc_v2
         # Finally if no other topology exists, try creating one with MatID
         with utils.timer(self.logger, 'calculating topology with matid'):
             topology_matid = self.topology_matid(material)
@@ -230,9 +224,6 @@ class TopologyNormalizer:
             flattened_systems = self.topology_data(data)
             return flattened_systems
 
-        return None
-
-    def topology_calculation_2(self) -> list[System] | None:
         return None
 
     def topology_calculation(self) -> list[System] | None:
@@ -310,13 +301,14 @@ class TopologyNormalizer:
                     add_system(system, topology, parent)
                     add_group(group.atoms_group, system)
                     old_labels.append(instance_indices)
-                elif len(old_labels[0]) == len(instance_indices):
-                    old_labels.append(instance_indices)
                 else:
-                    self.logger.warn(
-                        'the topology contains entries with the same label but with '
-                        'different number of atoms'
-                    )
+                    if len(old_labels[0]) == len(instance_indices):
+                        old_labels.append(instance_indices)
+                    else:
+                        self.logger.warn(
+                            'the topology contains entries with the same label but with '
+                            'different number of atoms'
+                        )
 
         add_group(groups, original)
         active_orbital_states = self._extract_orbital()
@@ -761,3 +753,4 @@ class TopologyNormalizer:
                 active_orbitals_results.append(active_orbitals_new)
                 break  # FIXME: currently only one set of active orbitals is supported, remove for multiple
         return active_orbitals_results
+

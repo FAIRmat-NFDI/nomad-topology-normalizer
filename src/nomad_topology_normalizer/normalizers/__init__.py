@@ -1,9 +1,8 @@
 from nomad.config.models.plugins import NormalizerEntryPoint
-from typing import ClassVar
 
 
 class TopologyNormalizerEntryPoint(NormalizerEntryPoint):
-    normalizer_level: ClassVar[int] = 3
+    level: int = 3
 
     def load(self):
         from nomad_topology_normalizer.normalizers.normalizer import TopologyNormalizer
