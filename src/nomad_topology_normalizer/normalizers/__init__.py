@@ -17,12 +17,10 @@ class TopologyNormalizerEntryPoint(NormalizerEntryPoint):
             )
             from nomad.normalizing import Normalizer
 
-        return TopologyNormalizer  # (**self.dict())
+        return TopologyNormalizer(**self.dict())
 
 
 topology_normalizer_plugin = TopologyNormalizerEntryPoint(
-    name='TopologyNormalizer',
+    name='Topology ',
     description='New normalizer entry point configuration.',
-    python_package='nomad_topology_normalizer',
-    normalizer_class_name='nomad_topology_normalizer.normalizers.normalizer.TopologyNormalizer',
 )
