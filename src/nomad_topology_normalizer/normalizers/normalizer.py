@@ -194,7 +194,6 @@ ATTRIBUTE_MAP: dict[str, str] = {
 
 
 class TopologyNormalizer(Normalizer):
-
     def normalize(self, archive: 'EntryArchive', logger: 'BoundLogger') -> None:
         super().normalize(archive, logger)
         self.entry_archive = archive
@@ -753,4 +752,3 @@ class TopologyNormalizer(Normalizer):
                 active_orbitals_results.append(active_orbitals_new)
                 break  # FIXME: currently only one set of active orbitals is supported, remove for multiple
         return active_orbitals_results
-
