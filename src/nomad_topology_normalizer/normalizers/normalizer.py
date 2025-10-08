@@ -35,7 +35,6 @@ from nomad.datamodel.results import (
     CoreHole,
     Material,
     Relation,
-    Results,
     System,
     structure_name_map,
 )
@@ -44,6 +43,7 @@ from nomad.datamodel.results import SymmetryNew as Symmetry
 if TYPE_CHECKING:
     from numpy.typing import NDArray
 from nomad.normalizing import Normalizer
+from structlog.stdlib import BoundLogger
 
 conventional_description: str = 'The conventional cell of the material from which the subsystem is constructed from.'
 subsystem_description: str = 'Automatically detected subsystem.'
@@ -54,17 +54,40 @@ with open(pathlib.Path(__file__).parent / 'data/top_50k_material_ids.json') as f
 
 def _lazy_common():
     from nomad.normalizing import common as _common
+
     return _common
 
 
-def ase_atoms_from_nomad_atoms(*a, **k): return _lazy_common().ase_atoms_from_nomad_atoms(*a, **k)
-def cell_from_ase_atoms(*a, **k): return _lazy_common().cell_from_ase_atoms(*a, **k)
-def material_id_1d(*a, **k): return _lazy_common().material_id_1d(*a, **k)
-def material_id_2d(*a, **k): return _lazy_common().material_id_2d(*a, **k)
-def material_id_bulk(*a, **k): return _lazy_common().material_id_bulk(*a, **k)
-def nomad_atoms_from_ase_atoms(*a, **k): return _lazy_common().nomad_atoms_from_ase_atoms(*a, **k)
-def structures_2d(*a, **k): return _lazy_common().structures_2d(*a, **k)
-def wyckoff_sets_from_matid(*a, **k): return _lazy_common().wyckoff_sets_from_matid(*a, **k)
+def ase_atoms_from_nomad_atoms(*a, **k):
+    return _lazy_common().ase_atoms_from_nomad_atoms(*a, **k)
+
+
+def cell_from_ase_atoms(*a, **k):
+    return _lazy_common().cell_from_ase_atoms(*a, **k)
+
+
+def material_id_1d(*a, **k):
+    return _lazy_common().material_id_1d(*a, **k)
+
+
+def material_id_2d(*a, **k):
+    return _lazy_common().material_id_2d(*a, **k)
+
+
+def material_id_bulk(*a, **k):
+    return _lazy_common().material_id_bulk(*a, **k)
+
+
+def nomad_atoms_from_ase_atoms(*a, **k):
+    return _lazy_common().nomad_atoms_from_ase_atoms(*a, **k)
+
+
+def structures_2d(*a, **k):
+    return _lazy_common().structures_2d(*a, **k)
+
+
+def wyckoff_sets_from_matid(*a, **k):
+    return _lazy_common().wyckoff_sets_from_matid(*a, **k)
 
 
 def get_topology_id(index: int) -> str:
@@ -207,6 +230,7 @@ class _MinimalMaterialNormalizer:
     - Fills structural_type from repr_system.type (if available)
     - Fills dimensionality/building_block from cached classification (if available)
     """
+
     def __init__(self, entry_archive, repr_system, repr_symmetry, conv_atoms, logger):
         self.entry_archive = entry_archive
         self.repr_system = repr_system
@@ -283,6 +307,9 @@ class TopologyNormalizer(Normalizer):
         topology_calc = self.topology_calculation()
         if topology_calc:
             return topology_calc
+        topology_calc_v2 = self.topology_calculation_2()
+        if topology_calc_v2:
+            return topology_calc_v2
         # Finally if no other topology exists, try creating one with MatID
         with utils.timer(self.logger, 'calculating topology with matid'):
             topology_matid = self.topology_matid(material)
@@ -295,6 +322,15 @@ class TopologyNormalizer(Normalizer):
             return flattened_systems
 
         return None
+
+    def topology_calculation_2(self) -> list[System] | None:
+        try:
+            # atoms_group -> sub_system = ModelSystem()
+            groups = self.entry_archive.data.model_system[0].sub_systems
+            if len(groups) == 0:
+                return None
+        except Exception:
+            return None
 
     def topology_calculation(self) -> list[System] | None:
         """Extracts the system topology as defined in the original calculation.
@@ -371,14 +407,13 @@ class TopologyNormalizer(Normalizer):
                     add_system(system, topology, parent)
                     add_group(group.atoms_group, system)
                     old_labels.append(instance_indices)
+                elif len(old_labels[0]) == len(instance_indices):
+                    old_labels.append(instance_indices)
                 else:
-                    if len(old_labels[0]) == len(instance_indices):
-                        old_labels.append(instance_indices)
-                    else:
-                        self.logger.warn(
-                            'the topology contains entries with the same label but with '
-                            'different number of atoms'
-                        )
+                    self.logger.warn(
+                        'the topology contains entries with the same label but with '
+                        'different number of atoms'
+                    )
 
         add_group(groups, original)
         active_orbital_states = self._extract_orbital()
