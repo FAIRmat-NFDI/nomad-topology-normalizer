@@ -54,17 +54,40 @@ with open(pathlib.Path(__file__).parent / 'data/top_50k_material_ids.json') as f
 
 def _lazy_common():
     from nomad.normalizing import common as _common
+
     return _common
 
 
-def ase_atoms_from_nomad_atoms(*a, **k): return _lazy_common().ase_atoms_from_nomad_atoms(*a, **k)
-def cell_from_ase_atoms(*a, **k): return _lazy_common().cell_from_ase_atoms(*a, **k)
-def material_id_1d(*a, **k): return _lazy_common().material_id_1d(*a, **k)
-def material_id_2d(*a, **k): return _lazy_common().material_id_2d(*a, **k)
-def material_id_bulk(*a, **k): return _lazy_common().material_id_bulk(*a, **k)
-def nomad_atoms_from_ase_atoms(*a, **k): return _lazy_common().nomad_atoms_from_ase_atoms(*a, **k)
-def structures_2d(*a, **k): return _lazy_common().structures_2d(*a, **k)
-def wyckoff_sets_from_matid(*a, **k): return _lazy_common().wyckoff_sets_from_matid(*a, **k)
+def ase_atoms_from_nomad_atoms(*a, **k):
+    return _lazy_common().ase_atoms_from_nomad_atoms(*a, **k)
+
+
+def cell_from_ase_atoms(*a, **k):
+    return _lazy_common().cell_from_ase_atoms(*a, **k)
+
+
+def material_id_1d(*a, **k):
+    return _lazy_common().material_id_1d(*a, **k)
+
+
+def material_id_2d(*a, **k):
+    return _lazy_common().material_id_2d(*a, **k)
+
+
+def material_id_bulk(*a, **k):
+    return _lazy_common().material_id_bulk(*a, **k)
+
+
+def nomad_atoms_from_ase_atoms(*a, **k):
+    return _lazy_common().nomad_atoms_from_ase_atoms(*a, **k)
+
+
+def structures_2d(*a, **k):
+    return _lazy_common().structures_2d(*a, **k)
+
+
+def wyckoff_sets_from_matid(*a, **k):
+    return _lazy_common().wyckoff_sets_from_matid(*a, **k)
 
 
 def get_topology_id(index: int) -> str:
