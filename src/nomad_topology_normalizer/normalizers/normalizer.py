@@ -440,7 +440,7 @@ class TopologyNormalizer(Normalizer):
                         ),
                     )
                     add_system(system, topology, parent)
-                    # TODO: increase nesting level
+                    # TODO: increase nesting level if neccessary
                     add_group(group.sub_systems, system)
                     old_labels.append(instance_indices)
                 elif len(old_labels[0]) == len(instance_indices):

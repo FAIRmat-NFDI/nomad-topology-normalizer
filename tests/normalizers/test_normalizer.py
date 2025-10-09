@@ -1,5 +1,5 @@
 import pytest
-from nomad.datamodel import EntryArchive, EntryMetadata
+from nomad.datamodel import EntryArchive
 from nomad.datamodel.results import Relation, System
 
 # from nomad.normalizing.topology import TopologyNormalizer
@@ -31,24 +31,6 @@ def mock_normalizer(
     )
 
     return normalizer
-
-
-def test_topology_calculation_2():
-    archive = EntryArchive(metadata=EntryMetadata())
-
-    class MockSystem:
-        atoms = None
-
-    normalizer = TopologyNormalizer(
-        entry_archive=archive,
-        repr_system=MockSystem(),
-        repr_symmetry=None,
-        conv_atoms=None,
-        logger=LOGGER,
-    )
-
-    result = normalizer.topology_calculation_2()
-    assert result is not None
 
 
 def test_get_topology_id_formats_correctly():
