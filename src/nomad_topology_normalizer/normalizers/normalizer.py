@@ -35,6 +35,7 @@ from nomad.datamodel.results import (
     CoreHole,
     Material,
     Relation,
+    # Results,
     System,
     structure_name_map,
 )
@@ -258,7 +259,7 @@ ATTRIBUTE_MAP: dict[str, str] = {
 }
 
 
-class TopologyNormalizer2(Normalizer):
+class TopologyNormalizer(Normalizer):
     def normalize(self, archive: 'EntryArchive', logger: 'BoundLogger') -> None:
         super().normalize(archive, logger)
         self.entry_archive = archive
