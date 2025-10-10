@@ -35,6 +35,7 @@ from nomad.datamodel.results import (
     CoreHole,
     Material,
     Relation,
+    # Results,
     System,
     structure_name_map,
 )
