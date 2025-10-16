@@ -107,6 +107,34 @@ def get_topology_id(index: int) -> str:
     return f'results/material/topology/{index}'
 
 
+def copy_v2_properties_to_system(
+    target_system: System,
+    v2_properties,
+) -> None:
+    """Copy atomic_fraction, mass_fraction, and elemental_composition from v2
+    schema properties (system_properties or subsystem_properties) to a topology
+    System object.
+
+    Args:
+        target_system: The topology System to populate
+        v2_properties: The v2 schema properties object (system_properties or
+            subsystem_properties)
+    """
+    if not v2_properties:
+        return
+
+    af = getattr(v2_properties, 'atomic_fraction', None)
+    mf = getattr(v2_properties, 'mass_fraction', None)
+    ec = getattr(v2_properties, 'elemental_composition', None)
+
+    if af is not None:
+        target_system.atomic_fraction = af
+    if mf is not None:
+        target_system.mass_fraction = mf
+    if ec:
+        target_system.elemental_composition = ec
+
+
 def get_topology_original_2(particles=None) -> System:
     """Creates a new topology item for the original structure. New schema"""
     n_particles = len(particles) if particles else None
@@ -114,7 +142,7 @@ def get_topology_original_2(particles=None) -> System:
         method='parser',
         label='original',
         description='A representative system chosen from the original simulation.',
-        dimensionality=None,  # No matid-compatible qualification stored in v2
+        dimensionality=None,  # No matid-compatible qualification stored in new schema
         system_relation=Relation(type='root'),
         n_atoms=n_particles,
     )
@@ -160,21 +188,18 @@ def get_topology_original(atoms=None, archive: EntryArchive | None = None) -> Sy
 def add_system_info_2(
     system: System,
     topologies: dict[str, System],
-    masses: list[float] | dict[str, float] | None = None,
 ) -> None:
     """V2 schema version that doesn't rely on atoms_ref. Populates system info
     from particle_indices stored in system.indices.
     """
-    # V2 stores particle_indices (not atom positions/species directly)
-    # Chemical formula and other info must come from parent system's particle_states
-
+    # Check if indices are available
     if system.indices is not None and len(system.indices) > 0:
-        # Calculate n_particles and atomic_fraction from indices
+        # Calculate n_atoms from first instance of particle indices
         first_instance = system.indices[0]
         if system.n_atoms is None:
             system.n_atoms = len(first_instance)
 
-        # Find parent to get total particle count for atomic_fraction
+        # Calculate atomic_fraction relative to parent system
         if system.parent_system:
             parent = topologies.get(system.parent_system)
             if parent and parent.n_atoms:
@@ -271,13 +296,13 @@ class TopologyNormalizer(Normalizer):
         super().normalize(archive, logger)
         self.entry_archive = archive
 
+        # ? Suggestion because otherwise no `self.masses` when calling add_system_info.
         # Initialize repr_system and masses from v1 (run) or v2 (data)
         self.repr_system = None
         self.repr_symmetry = None
         self.conv_atoms = None
         self.masses = None
 
-        # ? Suggestion because `self.masses` didn't exist when calling add_system_info.
         # Try v1 schema first
         try:
             if archive.run and archive.run[0].system:
@@ -330,6 +355,9 @@ class TopologyNormalizer(Normalizer):
         """Extracts the system topology as defined in the original calculation."""
         system = None
         groups = None
+        result = None
+
+        # Extract system from data structure
         try:
             if (
                 self.entry_archive.data
@@ -347,107 +375,113 @@ class TopologyNormalizer(Normalizer):
         except (AttributeError, IndexError):
             pass
 
-        if not system or not isinstance(system, SystemV2):
-            return None
+        # Validate system type and extract groups
+        if system and isinstance(system, SystemV2):
+            try:
+                groups = system.sub_systems
+            except Exception:
+                pass
 
-        try:
-            groups = system.sub_systems
-            if not groups or len(groups) == 0:
-                return None
-        except Exception:
-            pass
+            # Validate system has required data
+            has_valid_data = (
+                groups
+                and len(groups) > 0
+                and system.positions is not None
+                and len(system.positions) > 0
+                and system.particle_states
+                and len(system.particle_states) > 0
+            )
 
-        # Validate v2 system has required particle data
-        if (
-            system.positions is None
-            or len(system.positions) == 0
-            or not system.particle_states
-            or len(system.particle_states) == 0
-        ):
-            return None
+            if has_valid_data:
+                topology: dict[str, System] = {}
+                original = get_topology_original_2(system.particle_states)
+                add_system(original, topology)
+                label_to_indices: dict[str, list] = defaultdict(list)
 
-        topology: dict[str, System] = {}
-        original = get_topology_original_2(system.particle_states)
-        add_system(original, topology)
-        label_to_indices: dict[str, list] = defaultdict(list)
+                # Define mapping dictionaries once to avoid recreating them
+                description_map = {
+                    'molecule': 'Molecule extracted from the calculation topology.',
+                    'molecule_group': 'Group of molecules extracted from the '
+                    'calculation topology.',
+                    'monomer_group': 'Group of monomers extracted from the '
+                    'calculation topology.',
+                    'monomer': 'Monomer extracted from the calculation topology.',
+                    'active_orbitals': 'Orbitals targeted by the calculation.',
+                }
+                structural_type_map = {
+                    'active_orbitals': 'active orbitals',
+                    'molecule': 'molecule',
+                    'molecule_group': 'group',
+                    'monomer': 'monomer',
+                    'monomer_group': 'group',
+                }
+                building_block_map = {
+                    'molecule': 'molecule',
+                    'monomer': 'monomer',
+                }
+                relation_map = {
+                    'active_orbitals': 'group',
+                    'molecule': 'subsystem',
+                    'molecule_group': 'group',
+                    'monomer': 'subsystem',
+                    'monomer_group': 'group',
+                }
 
-        def add_group(groups, parent=None):
-            if not groups:
-                return
-            for group in groups:
-                label = group.name
-                # Groups with the same label are mapped to the same system.  # TODO: change this logic for active orbitals
-                old_labels = label_to_indices[label]
-                instance_indices = group.particle_indices
-                if not old_labels:
-                    description_map = {
-                        'molecule': 'Molecule extracted from the calculation topology.',
-                        'molecule_group': 'Group of molecules extracted from the '
-                        'calculation topology.',
-                        'monomer_group': 'Group of monomers extracted from the '
-                        'calculation topology.',
-                        'monomer': 'Monomer extracted from the calculation topology.',
-                        'active_orbitals': 'Orbitals targeted by the calculation.',
-                    }
-                    structural_type_map = {
-                        'active_orbitals': 'active orbitals',
-                        'molecule': 'molecule',
-                        'molecule_group': 'group',
-                        'monomer': 'monomer',
-                        'monomer_group': 'group',
-                    }  # determines the sub-title
-                    building_block_map = {
-                        'molecule': 'molecule',
-                        'monomer': 'monomer',
-                    }
-                    relation_map = {
-                        'active_orbitals': 'group',
-                        'molecule': 'subsystem',
-                        'molecule_group': 'group',
-                        'monomer': 'subsystem',
-                        'monomer_group': 'group',
-                    }  # determines the shading of non-highlighted atoms
-                    system = System(
-                        method='parser',
-                        description=description_map.get(group.branch_label),
-                        label=group.name,
-                        structural_type=structural_type_map.get(group.branch_label),
-                        building_block=building_block_map.get(group.branch_label),
-                        system_relation=Relation(
-                            type=relation_map.get(group.branch_label)
-                        ),
-                    )
-                    add_system(system, topology, parent)
-                    # TODO: increase nesting level if neccessary
-                    add_group(group.sub_systems, system)
-                    old_labels.append(instance_indices)
-                elif len(old_labels[0]) == len(instance_indices):
-                    old_labels.append(instance_indices)
-                else:
-                    self.logger.warn(
-                        'the topology contains entries with the same label but with '
-                        'different number of atoms'
-                    )
+                def add_group(groups, parent=None):
+                    if not groups:
+                        return
+                    for group in groups:
+                        label = group.name
+                        # Groups with same label mapped to same system
+                        # TODO: change for active orbitals
+                        old_labels = label_to_indices[label]
+                        instance_indices = group.particle_indices
+                        if not old_labels:
+                            system = System(
+                                method='parser',
+                                description=description_map.get(group.branch_label),
+                                label=group.name,
+                                structural_type=structural_type_map.get(
+                                    group.branch_label
+                                ),
+                                building_block=building_block_map.get(
+                                    group.branch_label
+                                ),
+                                system_relation=Relation(
+                                    type=relation_map.get(group.branch_label)
+                                ),
+                            )
+                            add_system(system, topology, parent)
+                            add_group(group.sub_systems, system)
+                            old_labels.append(instance_indices)
+                        elif len(old_labels[0]) == len(instance_indices):
+                            old_labels.append(instance_indices)
+                        else:
+                            self.logger.warn(
+                                'the topology contains entries with the same label '
+                                'but with different number of atoms'
+                            )
 
-        add_group(groups, original)
-        active_orbital_states = self._extract_orbital_2()
+                add_group(groups, original)
+                active_orbital_states = self._extract_orbital_2()
 
-        # Add the derived system information once all indices etc. are gathered.
-        for top in topology.values():
-            top.indices = label_to_indices.get(top.label)
-            add_system_info_2(top, topology, masses=self.masses)
-            if top.structural_type == 'active orbitals':
-                try:
-                    top.active_orbitals = active_orbital_states[0]
-                    active_orbital_states.pop(0)
-                except (
-                    IndexError
-                ):  # FIXME temporary fix to prevent output from projection parsers
-                    self.logger.warn(
-                        'Cannot assign all active orbital states to the topology.'
-                    )
+                # Add derived system information once all indices gathered
+                for top in topology.values():
+                    top.indices = label_to_indices.get(top.label)
+                    add_system_info_2(top, topology)
+                    if top.structural_type == 'active orbitals':
+                        try:
+                            top.active_orbitals = active_orbital_states[0]
+                            active_orbital_states.pop(0)
+                        except IndexError:
+                            # FIXME: temporary fix to prevent projection parser output
+                            self.logger.warn(
+                                'Cannot assign all active orbital states to topology.'
+                            )
 
-        return list(topology.values())
+                result = list(topology.values())
+
+        return result
 
     def topology_calculation(self) -> list[System] | None:
         """Extracts the system topology as defined in the original calculation.
@@ -667,16 +701,7 @@ class TopologyNormalizer(Normalizer):
         v2_props = getattr(section, 'subsystem_properties', None) or getattr(
             section, 'system_properties', None
         )
-        if v2_props:
-            af = getattr(v2_props, 'atomic_fraction', None)
-            mf = getattr(v2_props, 'mass_fraction', None)
-            ec = getattr(v2_props, 'elemental_composition', None)
-            if af is not None:
-                root.atomic_fraction = af
-            if mf is not None:
-                root.mass_fraction = mf
-            if ec:
-                root.elemental_composition = ec
+        copy_v2_properties_to_system(root, v2_props)
         add_system(root, topology, original)
         add_system_info(root, topology, masses=self.masses)
 
@@ -693,16 +718,8 @@ class TopologyNormalizer(Normalizer):
                     description='Imported SubSystemV2',
                 )
 
-                if sub_props := getattr(sub, 'subsystem_properties', None):
-                    af = getattr(sub_props, 'atomic_fraction', None)
-                    mf = getattr(sub_props, 'mass_fraction', None)
-                    ec = getattr(sub_props, 'elemental_composition', None)
-                    if af is not None:
-                        child.atomic_fraction = af
-                    if mf is not None:
-                        child.mass_fraction = mf
-                    if ec:
-                        child.elemental_composition = ec
+                sub_props = getattr(sub, 'subsystem_properties', None)
+                copy_v2_properties_to_system(root, sub_props)
                 add_system(child, topology, parent_sys)
                 add_system_info(child, topology, masses=self.masses)
 
@@ -939,25 +956,24 @@ class TopologyNormalizer(Normalizer):
 
     def _extract_orbital_2(self) -> list[CoreHole]:
         """
-        Gather atomic orbitals from v2 `data.model_system[].particle_states[].core_hole`.
-        Also apply normalization in the process.
+        Gather atomic orbitals from v2 schema:
+        `data.model_system[].particle_states[].core_hole`.
         """
-        active_orbitals_results: list[CoreHole] = []
-
-        if not (
-            self.entry_archive.data
-            and hasattr(self.entry_archive.data, 'model_system')
-            and self.entry_archive.data.model_system
-        ):
+        # Validate data structure exists
+        data = self.entry_archive.data
+        if not data or not hasattr(data, 'model_system') or not data.model_system:
             return []
 
-        for model_system in self.entry_archive.data.model_system:
+        # Search for first core_hole in model_system hierarchy
+        for model_system in data.model_system:
             if not hasattr(model_system, 'particle_states'):
                 continue
 
-            for particle_state in model_system.particle_states or []:
+            particle_states = model_system.particle_states or []
+            for particle_state in particle_states:
                 core_hole = getattr(particle_state, 'core_hole', None)
                 if core_hole is not None:
+                    # Normalize and create a deep copy
                     core_hole.normalize(EntryArchive(), None)
                     core_hole_new = CoreHole()
                     for quantity_name in core_hole.quantities:
@@ -967,13 +983,9 @@ class TopologyNormalizer(Normalizer):
                             getattr(core_hole, quantity_name),
                         )
                     core_hole_new.normalize(None, None)
-                    active_orbitals_results.append(core_hole_new)
-                    break
+                    return [core_hole_new]
 
-            if active_orbitals_results:
-                break
-
-        return active_orbitals_results
+        return []
 
     def _extract_orbital(self) -> list[CoreHole]:
         """
