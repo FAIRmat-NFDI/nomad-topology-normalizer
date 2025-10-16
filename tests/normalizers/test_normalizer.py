@@ -1,15 +1,15 @@
+# from nomad.normalizing.topology import TopologyNormalizer
+import numpy as np
 from nomad.client import normalize_all
 from nomad.datamodel import EntryArchive, EntryMetadata
 from nomad.datamodel.metainfo.workflow import Workflow
-
-# from nomad.normalizing.topology import TopologyNormalizer
-import numpy as np
 from nomad.datamodel.results import Material, Results
 from nomad.units import ureg
 from nomad.utils import get_logger
 from nomad_simulations.schema_packages.atoms_state import AtomsState
 from nomad_simulations.schema_packages.general import Simulation
 from nomad_simulations.schema_packages.model_system import AtomicCell, ModelSystem
+
 from nomad_topology_normalizer.normalizers.normalizer import TopologyNormalizer
 
 LOGGER = get_logger(__name__)
@@ -525,9 +525,6 @@ def test_topology_calculation_2_cgbead_system():
     archive.results = Results()
     archive.results.material = Material()
 
-    # First normalize with full pipeline to populate system_properties
-    from nomad.client import normalize_all
-
     normalize_all(archive)
 
     # Then run topology normalizer
@@ -544,14 +541,14 @@ def test_topology_calculation_2_cgbead_system():
     # Check mass-related properties
     cg_mol = systems_dict['cg_molecule']
 
-    # Verify n_atoms is set correctly (3 beads)
+    # Verify n_atoms is set correctly (2 beads)
     n_beads = 2
     assert cg_mol.n_atoms == n_beads
 
     # Verify atomic_fraction is calculated (2 out of 3 particles)
     expected_atomic_fraction = 2.0 / 3.0
-    assert cg_mol.atomic_fraction is not None
     diff_threshold = 1e-6
+    assert cg_mol.atomic_fraction is not None
     assert abs(cg_mol.atomic_fraction - expected_atomic_fraction) < diff_threshold
 
     # Check if mass_fraction is populated from upstream v2 normalizers
