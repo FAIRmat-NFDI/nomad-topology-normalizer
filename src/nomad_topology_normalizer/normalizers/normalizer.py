@@ -761,7 +761,7 @@ class TopologyNormalizer(Normalizer):
                 )
 
                 sub_props = getattr(sub, 'subsystem_properties', None)
-                copy_v2_properties_to_system(root, sub_props)
+                copy_v2_properties_to_system(child, sub_props)
                 add_system(child, topology, parent_sys)
                 add_system_info(child, topology, masses=self.masses)
 
