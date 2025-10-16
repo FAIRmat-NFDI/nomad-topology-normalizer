@@ -3,8 +3,13 @@ from nomad.datamodel import EntryArchive
 from nomad.datamodel.results import Relation, System
 
 # from nomad.normalizing.topology import TopologyNormalizer
+import numpy as np
+from nomad.datamodel.results import Material, Results
+from nomad.units import ureg
 from nomad.utils import get_logger
-
+from nomad_simulations.schema_packages.atoms_state import AtomsState
+from nomad_simulations.schema_packages.general import Simulation
+from nomad_simulations.schema_packages.model_system import AtomicCell, ModelSystem
 from nomad_topology_normalizer.normalizers.normalizer import TopologyNormalizer
 from src.nomad_topology_normalizer.normalizers.normalizer import (
     add_system,
