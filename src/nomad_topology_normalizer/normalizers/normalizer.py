@@ -198,10 +198,76 @@ ATTRIBUTE_MAP: dict[str, str] = {
 }
 
 
+class _MinimalMaterialNormalizer:
+    """
+    Tiny in-place replacement for MaterialNormalizer with just the fields that
+    TopologyNormalizer.topology(...) cares about.
+
+    - Sets results.material if missing
+    - Fills structural_type from repr_system.type (if available)
+    - Fills dimensionality/building_block from cached classification (if available)
+    """
+    def __init__(self, entry_archive, repr_system, repr_symmetry, conv_atoms, logger):
+        self.entry_archive = entry_archive
+        self.repr_system = repr_system
+        self.repr_symmetry = repr_symmetry
+        self.conv_atoms = conv_atoms
+        self.logger = logger
+
+    def material(self) -> Material:
+        # Ensure results.material exists
+        material = self.entry_archive.m_setdefault('results.material')
+
+        # structural_type is what TopologyNormalizer.topology() branches on
+        try:
+            stype = getattr(self.repr_system, 'type', None)
+            if stype:
+                material.structural_type = stype
+        except Exception:
+            pass
+
+        # Optional: dimensionality & building_block from cached classification
+        try:
+            classification = self.entry_archive.run[0].m_cache.get('classification')
+            if classification:
+                dim_map = {
+                    Class3D: '3D',
+                    Atom: '0D',
+                    Class0D: '0D',
+                    Class1D: '1D',
+                    Class2D: '2D',
+                    Surface: '2D',
+                    Material2D: '2D',
+                }
+                material.dimensionality = dim_map.get(classification)
+
+                bb_map = {
+                    Surface: 'surface',
+                    Material2D: '2D material',
+                }
+                bb = bb_map.get(classification)
+                if bb:
+                    material.building_block = bb
+        except Exception:
+            pass
+
+        # We intentionally skip symmetry & material_id, which topology code does not need
+        return material
+
+
 class TopologyNormalizer(Normalizer):
     def normalize(self, archive: 'EntryArchive', logger: 'BoundLogger') -> None:
         super().normalize(archive, logger)
         self.entry_archive = archive
+
+        if self.entry_archive.results.material is None:
+            self.entry_archive.results.material = _MinimalMaterialNormalizer(
+                self.entry_archive,
+                self.repr_system,
+                self.repr_symmetry,
+                self.conv_atoms,
+                logger,
+            ).material()
 
         if self.entry_archive.results and self.entry_archive.results.material:
             self.topology(self.entry_archive.results.material)
