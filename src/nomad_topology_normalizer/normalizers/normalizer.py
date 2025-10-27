@@ -350,9 +350,139 @@ class _MinimalMaterialNormalizer:
 
 
 class TopologyNormalizer(Normalizer):
+    def _initialize_representative_system(self, archive: 'EntryArchive') -> None:
+        """Initialize repr_system, repr_symmetry, conv_atoms, and masses.
+
+        Tries new data schema first (SystemV2/Simulation), then falls back to
+        old run schema.
+        """
+        self.repr_system = None
+        self.repr_symmetry = None
+        self.conv_atoms = None
+        self.masses = None
+
+        # Try new data schema first (SystemV2, Simulation)
+        self.repr_system = self._get_repr_system_from_data(archive)
+
+        # Fallback to old run schema if no data schema found
+        if self.repr_system is None:
+            self.repr_system = self._get_repr_system_from_run(archive)
+
+        # Get symmetry from results if available
+        self._get_symmetry_from_results(archive)
+
+        # Get masses - only works with old run schema
+        if self.repr_system and archive.run and len(archive.run) > 0:
+            try:
+                self.masses = atomutils.get_masses_from_computational_model(
+                    archive, repr_system=self.repr_system
+                )
+            except Exception as e:
+                self.logger.debug('could not get masses', exc_info=e)
+
+    def _get_repr_system_from_data(self, archive: 'EntryArchive'):
+        """Get representative system from new data schema (SystemV2/Simulation)."""
+        result = None
+        try:
+            data = getattr(archive, 'data', None)
+            if data is not None:
+                # Check if it's a Simulation with model_system
+                if hasattr(data, 'model_system') and data.model_system:
+                    if len(data.model_system) > 0:
+                        result = data.model_system[0]
+                # ? Might not be neccessary?
+                # Check if it's directly a SystemV2
+                elif isinstance(data, SystemV2):
+                    result = data
+        except Exception as e:
+            self.logger.debug(
+                'could not get representative system from data schema', exc_info=e
+            )
+        return result
+
+    def _get_repr_system_from_run(self, archive: 'EntryArchive'):
+        """Get representative system from old run schema."""
+        if not (archive.run and len(archive.run) > 0):
+            return None
+
+        # Try different sources in order of preference
+        result = self._try_workflow_system(archive)
+        if result is None:
+            result = self._try_calculation_system(archive)
+        if result is None:
+            result = self._try_last_system(archive)
+
+        # Post-process the result
+        result = self._resolve_system_reference(result)
+        return result
+
+    def _try_workflow_system(self, archive: 'EntryArchive'):
+        """Try to get system from workflow results."""
+        try:
+            workflow = getattr(archive, 'workflow2', None)
+            if workflow:
+                calc_result = workflow.results.calculation_result_ref
+                return calc_result.system_ref
+        except Exception:
+            pass
+        return None
+
+    def _try_calculation_system(self, archive: 'EntryArchive'):
+        """Try to get system from last calculation with system_ref."""
+        try:
+            for calc in reversed(archive.run[0].calculation):
+                if calc.system_ref is not None:
+                    return calc.system_ref
+        except Exception:
+            pass
+        return None
+
+    def _try_last_system(self, archive: 'EntryArchive'):
+        """Try to get last system from run."""
+        try:
+            if archive.run[0].system and len(archive.run[0].system) > 0:
+                return archive.run[0].system[-1]
+        except Exception:
+            pass
+        return None
+
+    def _resolve_system_reference(self, system):
+        """Resolve system references (sub_system_ref, m_resolved)."""
+        if system is None:
+            return None
+
+        # Check for sub_system_ref (e.g., phonon calculations)
+        try:
+            sub_ref = getattr(system, 'sub_system_ref', None)
+            if sub_ref is not None:
+                system = sub_ref
+        except Exception:
+            pass
+
+        # Resolve if it's a reference
+        try:
+            system = system.m_resolved()
+        except Exception:
+            pass
+
+        return system
+
+    def _get_symmetry_from_results(self, archive: 'EntryArchive') -> None:
+        """Get symmetry and conv_atoms from results if available."""
+        try:
+            if archive.results and archive.results.properties:
+                structures = getattr(archive.results.properties, 'structures', None)
+                if structures:
+                    self.repr_symmetry = getattr(structures, 'structure_original', None)
+        except Exception:
+            pass
+
     def normalize(self, archive: 'EntryArchive', logger: 'BoundLogger') -> None:
         super().normalize(archive, logger)
         self.entry_archive = archive
+
+        # Initialize representative system and related attributes
+        self._initialize_representative_system(archive)
 
         if self.entry_archive.results.material is None:
             self.entry_archive.results.material = _MinimalMaterialNormalizer(
