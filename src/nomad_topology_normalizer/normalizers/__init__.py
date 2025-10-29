@@ -10,10 +10,11 @@ class TopologyNormalizerEntryPoint(NormalizerEntryPoint):
         try:
             # Import lazily to avoid circulars during module initialization
             from .normalizer import TopologyNormalizer
+
             return TopologyNormalizer(**self.dict())
         except Exception as e:
             warnings.warn(
-                f"TopologyNormalizer not ready during plugin scan ({e!r}); using No-Op normalizer."
+                f'TopologyNormalizer not ready during plugin scan ({e!r}); using No-Op normalizer.'
             )
             from nomad.normalizing import Normalizer
 
