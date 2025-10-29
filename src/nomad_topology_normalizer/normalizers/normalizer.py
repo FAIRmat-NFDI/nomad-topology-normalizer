@@ -112,11 +112,11 @@ def copy_v2_properties_to_system(
     v2_properties,
 ) -> None:
     """Copy atomic_fraction, mass_fraction, and elemental_composition from v2
-    schema properties (system_properties or subsystem_properties) to a topology
+    schema properties (system_properties or subsystem_properties) to a
     System object.
 
     Args:
-        target_system: The topology System to populate
+        target_system: The topology to populate
         v2_properties: The v2 schema properties object (system_properties or
             subsystem_properties)
     """
@@ -188,22 +188,63 @@ def get_topology_original(atoms=None, archive: EntryArchive | None = None) -> Sy
 def add_system_info_2(
     system: System,
     topologies: dict[str, System],
+    parent_system_v2: 'SystemV2 | None' = None,
 ) -> None:
-    """V2 schema version that doesn't rely on atoms_ref. Populates system info
-    from particle_indices stored in system.indices.
+    """V2 schema version that populates system info from particle_indices.
+
+    Args:
+        system: The topology system to populate
+        topologies: Dict of all topology systems
+        parent_system_v2: The parent SystemV2 with positions and particle_states
     """
     # Check if indices are available
-    if system.indices is not None and len(system.indices) > 0:
-        # Calculate n_atoms from first instance of particle indices
-        first_instance = system.indices[0]
-        if system.n_atoms is None:
-            system.n_atoms = len(first_instance)
+    if system.indices is None or len(system.indices) == 0:
+        return
 
-        # Calculate atomic_fraction relative to parent system
-        if system.parent_system:
-            parent = topologies.get(system.parent_system)
-            if parent and parent.n_atoms:
-                system.atomic_fraction = system.n_atoms / parent.n_atoms
+    # Calculate n_atoms from first instance of particle indices
+    first_instance = system.indices[0]
+    if system.n_atoms is None:
+        system.n_atoms = len(first_instance)
+
+    # Calculate atomic_fraction relative to parent system
+    if system.parent_system:
+        parent = topologies.get(system.parent_system)
+        if parent and parent.n_atoms:
+            system.atomic_fraction = system.n_atoms / parent.n_atoms
+
+    # If we have access to parent SystemV2, populate system info
+    if not parent_system_v2 or not hasattr(parent_system_v2, 'particle_states'):
+        return
+
+    try:
+        particle_states = parent_system_v2.particle_states
+        positions = getattr(parent_system_v2, 'positions', None)
+
+        if not particle_states or len(particle_states) == 0:
+            return
+        if positions is None or len(positions) == 0:
+            return
+
+        # Extract symbols for formula calculation
+        symbols = []
+        for idx in first_instance:
+            if idx >= len(particle_states):
+                continue
+            state = particle_states[idx]
+            if hasattr(state, 'chemical_symbol') and state.chemical_symbol:
+                symbols.append(state.chemical_symbol)
+            elif hasattr(state, 'atomic_number') and state.atomic_number:
+                symbols.append(chemical_symbols[state.atomic_number])
+
+        if not symbols:
+            return
+
+        # Calculate chemical formulas
+        formula = atomutils.Formula(''.join(symbols))
+        system.chemical_composition_reduced = formula.format('reduced')
+        system.chemical_composition_hill = formula.format('hill')
+    except Exception:
+        pass
 
 
 def add_system_info(
@@ -354,7 +395,7 @@ class TopologyNormalizer(Normalizer):
         """Initialize repr_system, repr_symmetry, conv_atoms, and masses.
 
         Tries new data schema first (SystemV2/Simulation), then falls back to
-        old run schema.
+        old run schema. This method handles both schema versions.
         """
         self.repr_system = None
         self.repr_symmetry = None
@@ -389,8 +430,15 @@ class TopologyNormalizer(Normalizer):
                 # Check if it's a Simulation with model_system
                 if hasattr(data, 'model_system') and data.model_system:
                     if len(data.model_system) > 0:
-                        result = data.model_system[0]
-                # ? Might not be neccessary?
+                        # Check if parser marked a system as representative
+                        for system in data.model_system:
+                            if getattr(system, 'is_representative', True):
+                                result = system
+                                break
+                        # If no representative system found, use the last system
+                        if result is None:
+                            result = data.model_system[-1]
+                # ? Not 100% sure this is a realistic case
                 # Check if it's directly a SystemV2
                 elif isinstance(data, SystemV2):
                     result = data
@@ -494,7 +542,9 @@ class TopologyNormalizer(Normalizer):
             ).material()
 
         if self.entry_archive.results and self.entry_archive.results.material:
-            self.topology(self.entry_archive.results.material)
+            topology = self.topology(self.entry_archive.results.material)
+            if topology:
+                self.entry_archive.results.material.topology.extend(topology)
 
     def topology(self, material) -> list[System] | None:
         """Returns a dictionary that contains all of the topologies mapped by id."""
@@ -503,25 +553,25 @@ class TopologyNormalizer(Normalizer):
         topology = self.entry_archive.m_xpath('results.material.topology')
         if topology:
             return None
-        # Next use the topology from the calculation
-        topology_calc = self.topology_calculation()
-        if topology_calc:
-            return topology_calc
-        topology_calc_v2 = self.topology_calculation_2()
-        if topology_calc_v2:
-            return topology_calc_v2
-        # Finally if no other topology exists, try creating one with MatID
-        with utils.timer(self.logger, 'calculating topology with matid'):
-            topology_matid = self.topology_matid(material)
-        if topology_matid:
-            return topology_matid
 
-        data = self.entry_archive.data
-        if data and isinstance(data, SystemV2):
-            flattened_systems = self.topology_data(data)
-            return flattened_systems
+        # First: topology from old run schema calculation
+        topology = self.topology_calculation()
 
-        return None
+        # Second: topology from new data schema calculation
+        if topology is None:
+            topology = self.topology_calculation_2()
+
+        # Third: create topology with MatID
+        if topology is None:
+            with utils.timer(self.logger, 'calculating topology with matid'):
+                topology = self.topology_matid(material)
+        # ? Fallback to topology_data, still needed with topology_calculation_2?
+        if topology is None:
+            data = self.entry_archive.data
+            if data and isinstance(data, SystemV2):
+                topology = self.topology_data(data)
+
+        return topology
 
     def topology_calculation_2(self) -> list[System] | None:
         """Extracts the system topology as defined in the original calculation."""
@@ -530,20 +580,21 @@ class TopologyNormalizer(Normalizer):
         result = None
 
         # Extract system from data structure
+        data = self.entry_archive.data
         try:
             if (
-                self.entry_archive.data
+                data
                 and isinstance(
-                    self.entry_archive.data,
+                    data,
                     __import__(
                         'nomad_simulations.schema_packages.general',
                         fromlist=['Simulation'],
                     ).Simulation,
                 )
-                and self.entry_archive.data.model_system
-                and len(self.entry_archive.data.model_system) > 0
+                and data.model_system
+                and len(data.model_system) > 0
             ):
-                system = self.entry_archive.data.model_system[0]
+                system = data.model_system[0]
         except (AttributeError, IndexError):
             pass
 
@@ -601,7 +652,7 @@ class TopologyNormalizer(Normalizer):
 
                 def add_group(groups, parent=None):
                     if not groups:
-                        return
+                        return None
                     for group in groups:
                         label = group.name
                         # Groups with same label mapped to same system
@@ -630,8 +681,8 @@ class TopologyNormalizer(Normalizer):
                             old_labels.append(instance_indices)
                         else:
                             self.logger.warn(
-                                'the topology contains entries with the same label '
-                                'but with different number of atoms'
+                                'The topology contains entries with the same label '
+                                'but with different numbers of atoms'
                             )
 
                 add_group(groups, original)
@@ -640,7 +691,7 @@ class TopologyNormalizer(Normalizer):
                 # Add derived system information once all indices gathered
                 for top in topology.values():
                     top.indices = label_to_indices.get(top.label)
-                    add_system_info_2(top, topology)
+                    add_system_info_2(top, topology, parent_system_v2=system)
                     if top.structural_type == 'active orbitals':
                         try:
                             top.active_orbitals = active_orbital_states[0]

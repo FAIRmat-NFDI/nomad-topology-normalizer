@@ -18,13 +18,6 @@ class TopologyNormalizerEntryPoint(NormalizerEntryPoint):
             )
             from nomad.normalizing import Normalizer
 
-            return TopologyNormalizer(**self.dict())
-        except Exception as e:
-            warnings.warn(
-                f'TopologyNormalizer not ready during plugin scan ({e!r}); using No-Op normalizer.'
-            )
-            from nomad.normalizing import Normalizer
-
             class _NoOpTopology(Normalizer):
                 def normalize(self, *_, **__):
                     return None
