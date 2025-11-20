@@ -10,7 +10,7 @@ from nomad_simulations.schema_packages.atoms_state import AtomsState
 from nomad_simulations.schema_packages.general import Simulation
 from nomad_simulations.schema_packages.model_system import AtomicCell, ModelSystem
 
-from nomad_topology_normalizer.normalizers.normalizer import TopologyNormalizer
+from nomad_topology_normalizer.normalizers.topology import TopologyNormalizer
 
 LOGGER = get_logger(__name__)
 
