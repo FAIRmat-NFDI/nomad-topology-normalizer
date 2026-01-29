@@ -8,22 +8,22 @@ from nomad.units import ureg
 from nomad.utils import get_logger
 from nomad_simulations.schema_packages.atoms_state import AtomsState
 from nomad_simulations.schema_packages.general import Simulation
-from nomad_simulations.schema_packages.model_system import AtomicCell, ModelSystem
+from nomad_simulations.schema_packages.model_system import ModelSystem
 
 from nomad_topology_normalizer.normalizers.topology import TopologyNormalizer
 
 LOGGER = get_logger(__name__)
 
 
-def test_topology_calculation_2():
-    """Test topology_calculation_2 with minimal new schema data."""
+def test_topology_calculation():
+    """Test topology_calculation with minimal new schema data."""
 
     archive = EntryArchive(metadata=EntryMetadata())
 
     simulation = Simulation()
     model_system = ModelSystem(name='test_system')
 
-    # No sub_systems, topology_calculation_2 should return None
+    # No sub_systems, topology_calculation should return None
     simulation.model_system.append(model_system)
     archive.data = simulation
 
@@ -36,12 +36,12 @@ def test_topology_calculation_2():
     # Call normalize to set up entry_archive and other attributes
     normalizer.normalize(archive, LOGGER)
 
-    result = normalizer.topology_calculation_2()
+    result = normalizer.topology_calculation()
     assert result is None
 
 
-def test_topology_calculation_2_with_subsystem():
-    """Test topology_calculation_2 with subsystems."""
+def test_topology_calculation_with_subsystem():
+    """Test topology_calculation with subsystems."""
 
     # Create archive
     archive = EntryArchive(metadata=EntryMetadata())
@@ -61,11 +61,9 @@ def test_topology_calculation_2_with_subsystem():
     root.particle_states.append(AtomsState(chemical_symbol='H', atomic_number=1))
     root.particle_states.append(AtomsState(chemical_symbol='H', atomic_number=1))
 
-    # Add cell
-    cell = AtomicCell()
-    cell.lattice_vectors = np.eye(3) * 10.0 * ureg.angstrom
-    cell.periodic_boundary_conditions = [True, True, True]
-    root.cell.append(cell)
+    # Add cell properties directly to ModelSystem
+    root.lattice_vectors = np.eye(3) * 10.0 * ureg.angstrom
+    root.periodic_boundary_conditions = [True, True, True]
 
     # Add a subsystem
     subsystem = ModelSystem(
@@ -88,7 +86,7 @@ def test_topology_calculation_2_with_subsystem():
     normalizer = TopologyNormalizer()
     normalizer.normalize(archive, LOGGER)
 
-    result = normalizer.topology_calculation_2()
+    result = normalizer.topology_calculation()
 
     # Should return a list of System objects
     assert result is not None
@@ -96,7 +94,7 @@ def test_topology_calculation_2_with_subsystem():
     assert len(result) > 0
 
 
-def test_topology_calculation_2_nested_subsystems():
+def test_topology_calculation_nested_subsystems():
     """Test nested hierarchy: root -> molecule_group -> molecule."""
 
     archive = EntryArchive(metadata=EntryMetadata())
@@ -127,11 +125,9 @@ def test_topology_calculation_2_nested_subsystems():
             AtomsState(chemical_symbol=symbol, atomic_number=atomic_num)
         )
 
-    # Add cell
-    cell = AtomicCell()
-    cell.lattice_vectors = np.eye(3) * 10.0 * ureg.angstrom
-    cell.periodic_boundary_conditions = [True, True, True]
-    root.cell.append(cell)
+    # Add cell properties directly to ModelSystem
+    root.lattice_vectors = np.eye(3) * 10.0 * ureg.angstrom
+    root.periodic_boundary_conditions = [True, True, True]
 
     # Add molecule_group containing two molecules
     molecule_group = ModelSystem(
@@ -168,7 +164,7 @@ def test_topology_calculation_2_nested_subsystems():
     # Normalize and run topology calculation
     normalizer = TopologyNormalizer()
     normalizer.normalize(archive, LOGGER)
-    result = normalizer.topology_calculation_2()
+    result = normalizer.topology_calculation()
 
     # Verify nested structure created
     assert result is not None
@@ -177,7 +173,7 @@ def test_topology_calculation_2_nested_subsystems():
     assert len(result) >= n_systems  # original + molecule_group + molecules
 
 
-def test_topology_calculation_2_multiple_same_label():
+def test_topology_calculation_multiple_same_label():
     """Test multiple subsystems with same label (e.g., multiple H2O molecules)."""
 
     archive = EntryArchive(metadata=EntryMetadata())
@@ -231,7 +227,7 @@ def test_topology_calculation_2_multiple_same_label():
 
     normalizer = TopologyNormalizer()
     normalizer.normalize(archive, LOGGER)
-    result = normalizer.topology_calculation_2()
+    result = normalizer.topology_calculation()
 
     assert result is not None
     # Should have original + one system for label 'water' with multiple instances
@@ -244,7 +240,7 @@ def test_topology_calculation_2_multiple_same_label():
     assert len(water_system.indices) == n_indices
 
 
-def test_topology_calculation_2_branch_label_types():
+def test_topology_calculation_branch_label_types():
     """Test different branch_label types: monomer, monomer_group."""
 
     archive = EntryArchive(metadata=EntryMetadata())
@@ -327,7 +323,7 @@ def test_topology_calculation_2_branch_label_types():
 
     normalizer = TopologyNormalizer()
     normalizer.normalize(archive, LOGGER)
-    result = normalizer.topology_calculation_2()
+    result = normalizer.topology_calculation()
 
     assert result is not None
     systems_dict = {s.label: s for s in result}
@@ -341,7 +337,7 @@ def test_topology_calculation_2_branch_label_types():
     assert systems_dict['ethylene'].building_block == 'monomer'
 
 
-def test_topology_calculation_2_no_positions():
+def test_topology_calculation_no_positions():
     """Test system with particle_states but no positions - should return None."""
 
     archive = EntryArchive(metadata=EntryMetadata())
@@ -374,13 +370,13 @@ def test_topology_calculation_2_no_positions():
 
     normalizer = TopologyNormalizer()
     normalizer.normalize(archive, LOGGER)
-    result = normalizer.topology_calculation_2()
+    result = normalizer.topology_calculation()
 
     # Should return None due to missing positions
     assert result is None
 
 
-def test_topology_calculation_2_no_particle_states():
+def test_topology_calculation_no_particle_states():
     """Test system with positions but no particle_states - should return None."""
 
     archive = EntryArchive(metadata=EntryMetadata())
@@ -411,13 +407,13 @@ def test_topology_calculation_2_no_particle_states():
 
     normalizer = TopologyNormalizer()
     normalizer.normalize(archive, LOGGER)
-    result = normalizer.topology_calculation_2()
+    result = normalizer.topology_calculation()
 
     # Should return None due to missing particle_states
     assert result is None
 
 
-def test_topology_calculation_2_mismatched_label_atom_counts():
+def test_topology_calculation_mismatched_label_atom_counts():
     """Test same label but different atom counts - should log warning."""
 
     archive = EntryArchive(metadata=EntryMetadata())
@@ -468,7 +464,7 @@ def test_topology_calculation_2_mismatched_label_atom_counts():
     normalizer.normalize(archive, LOGGER)
 
     # Should not crash, may log warning
-    result = normalizer.topology_calculation_2()
+    result = normalizer.topology_calculation()
     assert result is not None
 
     # First instance should be stored, second should be rejected
@@ -481,7 +477,7 @@ def test_topology_calculation_2_mismatched_label_atom_counts():
     assert len(fragment_system.indices[0]) == n_indices
 
 
-def test_topology_calculation_2_cgbead_system():
+def test_topology_calculation_cgbead_system():
     """Test coarse-grained system with CGBeadState particles and mass processing."""
     from nomad_simulations.schema_packages.atoms_state import CGBeadState
 
@@ -530,7 +526,7 @@ def test_topology_calculation_2_cgbead_system():
     # Then run topology normalizer
     normalizer = TopologyNormalizer()
     normalizer.normalize(archive, LOGGER)
-    result = normalizer.topology_calculation_2()
+    result = normalizer.topology_calculation()
 
     # Should handle CG systems
     assert result is not None
