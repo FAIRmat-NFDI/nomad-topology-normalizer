@@ -32,7 +32,6 @@ from nomad_topology_normalizer.normalizers.common import (
     material_id_2d,
     material_id_bulk,
 )
-from nomad_topology_normalizer.normalizers.topology import TopologyNormalizer
 
 
 class MaterialNormalizer:
@@ -73,7 +72,7 @@ class MaterialNormalizer:
                     and self.repr_system.chemical_formula
                 ):
                     hill_formula = self.repr_system.chemical_formula.hill
-                    
+
                 if not hill_formula:
                     self.logger.warning(
                         'no chemical formula available on representative system'
@@ -143,6 +142,9 @@ class MaterialNormalizer:
             material.material_id = material_id_2d(self.spg_number, self.wyckoff_sets)
         elif self.structural_type == '1D':
             material.material_id = material_id_1d(self.conv_atoms)
+
+        # Lazy import to avoid circular dependency
+        from nomad_topology_normalizer.normalizers.topology import TopologyNormalizer
 
         topology = TopologyNormalizer(
             self.entry_archive,

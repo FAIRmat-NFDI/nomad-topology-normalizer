@@ -1,3 +1,27 @@
+"""
+Topology Normalizer for v2 Data Schema
+=======================================
+
+This module provides topology normalization for entries using v2 data schema
+(archive.data with basesections.v2.System). It is called by ResultsNormalizer
+after schema version detection.
+
+Topology Creation Strategy (Waterfall)
+---------------------------------------
+
+1. **topology_calculation()** - Extract from parser-defined sub_systems
+   └─ Uses data.model_system[].sub_systems if available
+
+2. **topology_matid()** - Algorithmic detection using MatID
+   └─ Symmetry analysis and clustering for automatic topology detection
+
+3. **topology_data()** - Fallback for SystemV2 entries
+   └─ Direct conversion from SystemV2 structure
+
+Note: Schema version detection and routing logic is in ResultsNormalizer.
+See results.py for the complete normalization cascade architecture.
+"""
+
 from typing import (
     TYPE_CHECKING,
 )
@@ -279,11 +303,11 @@ class _MinimalMaterialNormalizer:
 
 class TopologyNormalizer(Normalizer):
     """Topology normalizer for material structure analysis.
-    
-    Inherits from both local Normalizer (for helper methods) and 
+
+    Inherits from both local Normalizer (for helper methods) and
     nomad.normalizing.Normalizer (for plugin compatibility).
     """
-    
+
     def _initialize_representative_system(self, archive: 'EntryArchive') -> None:
         """Initialize repr_system, repr_symmetry, and conv_atoms.
 
@@ -311,8 +335,14 @@ class TopologyNormalizer(Normalizer):
             pass
 
     def normalize(self, archive: 'EntryArchive', logger: 'BoundLogger') -> None:
-        super().normalize(archive, logger)
+        """
+        Main normalization entry point for v2 data schema.
+
+        Called by ResultsNormalizer after schema version detection.
+        This only handles v2 data schema (archive.data).
+        """
         self.entry_archive = archive
+        self.logger = logger
 
         # Initialize representative system and related attributes
         self._initialize_representative_system(archive)

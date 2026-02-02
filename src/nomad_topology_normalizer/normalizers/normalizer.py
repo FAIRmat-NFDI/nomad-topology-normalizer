@@ -22,24 +22,17 @@
 
 from nomad.datamodel.metainfo.basesections.v2 import System as SystemV2
 
-# Import base Normalizer - delay to avoid circular imports during plugin loading
-# This import is safe when module is directly imported (e.g., in tests)
-# but may cause issues during entry point scanning
-try:
-    from nomad.normalizing import Normalizer as NomadNormalizer
-except ImportError:
-    # During plugin scanning, this might not be available yet
-    # Create a placeholder that will be resolved later
-    class NomadNormalizer:  # type: ignore[no-redef]
-        pass
 
-
-class Normalizer(NomadNormalizer):
-    """
-    Extended base class for normalizer plugins with additional functionality.
-
-    Inherits from nomad.normalizing.Normalizer to ensure compatibility with
-    NOMAD's plugin system.
+class Normalizer:
+    """Helper class providing common functionality for internal normalizers.
+    
+    NOTE: This is NOT a NOMAD entry point normalizer!
+    - This is a utility class used by TopologyNormalizer, MaterialNormalizer, etc.
+    - It does NOT inherit from nomad.normalizing.Normalizer (to avoid circular imports)
+    - Only ResultsNormalizer (the actual entry point) inherits from nomad.normalizing.Normalizer
+    
+    The actual entry point ResultsNormalizer is created dynamically in __init__.py
+    to avoid circular import issues. See ResultsNormalizerBase for details.
     """
 
     def _representative_system(self, archive) -> 'SystemV2 | None':
@@ -107,3 +100,4 @@ class Normalizer(NomadNormalizer):
             )
 
         return result
+
