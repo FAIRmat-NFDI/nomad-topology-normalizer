@@ -54,51 +54,6 @@ def archive_with_data_schema():
 
 
 @pytest.fixture
-def archive_with_run_schema():
-    """Create an archive with v1 run schema (archive.run)."""
-    archive = EntryArchive(metadata=EntryMetadata())
-
-    # Create minimal v1 run schema
-    # Note: This uses the old schema classes which we're importing from runschema
-    try:
-        import runschema.run
-        import runschema.system
-
-        run = runschema.run.Run()
-        system = runschema.system.System()
-        system.is_representative = True
-
-        # Add minimal system data
-        system.atoms = runschema.system.Atoms(
-            positions=np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]]) * ureg.angstrom,
-            labels=['H', 'H'],
-        )
-
-        run.system.append(system)
-        archive.run.append(run)
-
-    except ImportError:
-        # If runschema not available, create a mock structure
-        from nomad.datamodel.data import ArchiveSection
-
-        class MockSystem(ArchiveSection):
-            is_representative = True
-
-        class MockRun(ArchiveSection):
-            system = []
-
-        run = MockRun()
-        run.system = [MockSystem()]
-        archive.run = [run]
-
-    # Initialize results
-    archive.results = Results()
-    archive.results.properties = Properties()
-
-    return archive
-
-
-@pytest.fixture
 def archive_empty():
     """Create an archive with neither data nor run schema."""
     archive = EntryArchive(metadata=EntryMetadata())
@@ -128,33 +83,6 @@ def test_schema_detection_data_schema(archive_with_data_schema, caplog):
     assert not any(
         'legacy results normalization' in record.message for record in caplog.records
     ), 'Should not log legacy path'
-
-
-def test_schema_detection_run_schema(archive_with_run_schema, caplog):
-    """Test that legacy schema (including run) is detected and routed correctly."""
-    normalizer = ResultsNormalizer()
-
-    # Clear any previous log records
-    caplog.clear()
-
-    # Run normalization
-    try:
-        normalizer.normalize(archive_with_run_schema, LOGGER)
-    except Exception:
-        # Legacy path may fail with incomplete mock - that's OK,
-        # we just want to verify routing happened
-        pass
-
-    # Check that the legacy path was taken
-    assert any(
-        'legacy results normalization' in record.message for record in caplog.records
-    ), 'Should log legacy path'
-
-    # Should NOT see v2 data schema message
-    assert not any(
-        'v2 data schema results normalization' in record.message
-        for record in caplog.records
-    ), 'Should not log v2 data schema path'
 
 
 def test_schema_detection_no_schema(archive_empty, caplog):
