@@ -41,8 +41,10 @@ class ResultsNormalizerEntryPoint(NormalizerEntryPoint):
             {
                 k: v
                 for k, v in ResultsNormalizerBase.__dict__.items()
-                if not k.startswith('_')
-            },  # Copy all methods
+                if not k.startswith(
+                    '__'
+                )  # Skip only dunder methods, keep private methods
+            },  # Copy all methods including private ones (_is_v2_data_schema, etc.)
         )
 
         return ResultsNormalizer()
