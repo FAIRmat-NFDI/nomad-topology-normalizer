@@ -143,16 +143,6 @@ from nomad_topology_normalizer.normalizers.method import MethodNormalizer
 # Don't import local Normalizer to avoid circular import
 # ResultsNormalizer inherits directly from nomad.normalizing.Normalizer
 
-try:
-    import runschema
-
-    runschema.run_schema_entry_point.load()
-    import runschema.calculation
-    import runschema.method
-    import runschema.system
-except Exception:
-    runschema, simulationworkflowschema = None, None
-
 re_label = re.compile('^([a-zA-Z][a-zA-Z]?)[^a-zA-Z]*')
 elements = set(ase.data.chemical_symbols)
 
@@ -171,25 +161,44 @@ def isint(value: Any) -> bool:
         return False
 
 
-# Define base class placeholder - will be patched after class definition
-_Normalizer = object  # Temporary placeholder
+# CIRCULAR IMPORT WORKAROUND:
+# =========================
+# This class does NOT inherit from nomad.normalizing.Normalizer to avoid circular imports.
+#
+# The Problem:
+# When nomad.normalizing.__init__.py loads entry points, it imports this module.
+# If this class inherited from nomad.normalizing.Normalizer, it would trigger:
+#   results.py -> import nomad.normalizing.Normalizer
+#              -> nomad.normalizing.__init__.py (still loading)
+#              -> loads entry points
+#              -> imports results.py again (CIRCULAR!)
+#
+# The Solution:
+# 1. ResultsNormalizerBase is a plain class (no base class)
+# 2. The entry point's load() method creates the actual ResultsNormalizer class
+#    dynamically using type() with proper inheritance from nomad.normalizing.Normalizer
+# 3. This ensures nomad.normalizing has finished initializing before we inherit from it
+#
+# See: nomad_topology_normalizer/normalizers/__init__.py::ResultsNormalizerEntryPoint.load()
+class ResultsNormalizerBase:
+    """Results normalizer implementation with schema version detection.
 
+    WARNING: This is NOT the actual normalizer class used at runtime!
+    The entry point creates a proper subclass dynamically. See class docstring above.
 
-class ResultsNormalizerBase:  # type: ignore[misc]
-    """Results normalizer with schema version detection.
-    
     Strategy:
     1. Check if archive.data exists (v2 schema) → use new normalization cascade
     2. If not, fall back to archive.run (v1 schema) → delegate to legacy normalizer
-    
+
     This ensures backward compatibility during the transition period.
     """
+
     domain = None
     normalizer_level = 3
 
     def normalize(self, archive: EntryArchive, logger=None) -> None:
         self.entry_archive = archive
-        
+
         # Setup logger
         if logger is not None:
             self.logger = logger.bind(normalizer=self.__class__.__name__)
@@ -197,7 +206,7 @@ class ResultsNormalizerBase:  # type: ignore[misc]
         # ========== LOGICAL SWITCH: v2 basesections vs legacy ==========
         # Check if v2 data schema with basesections.v2 is present
         has_v2_schema = self._is_v2_data_schema(archive)
-        
+
         if has_v2_schema:
             # NEW PATH: Use v2 data schema normalization (this plugin)
             self.logger.info('Using v2 data schema results normalization')
@@ -206,75 +215,77 @@ class ResultsNormalizerBase:  # type: ignore[misc]
             # LEGACY PATH: Delegate to legacy normalizer (handles run schema, old data schema, etc.)
             self.logger.info('Falling back to legacy results normalization')
             self._normalize_with_legacy(archive, self.logger)
-        
+
         # Always handle measurements (works for both v1 and v2)
         for measurement in self.entry_archive.measurement:
             self.normalize_measurement(measurement)
 
         self.entry_archive = None
         self.section_run = None
-    
+
     def _is_v2_data_schema(self, archive: EntryArchive) -> bool:
         """Check if archive uses v2 data schema with basesections.v2.
-        
+
         Returns True if:
         - archive.data exists
         - archive.data uses v2 schema classes (ModelSystem from basesections.v2)
         """
         if not hasattr(archive, 'data') or archive.data is None:
             return False
-        
+
         # Check if data has model_system (v2 schema indicator)
         if not hasattr(archive.data, 'model_system'):
             return False
-        
+
         # Verify it's using basesections.v2 by checking the class origin
         from nomad.datamodel.metainfo.basesections.v2 import System as SystemV2
-        
+
         # If model_system exists and has items, check if they're v2 System instances
         if hasattr(archive.data, 'model_system') and archive.data.model_system:
             # Check if at least one model_system is a v2 System
             return any(isinstance(sys, SystemV2) for sys in archive.data.model_system)
-        
+
         # If model_system attribute exists but is empty, still consider it v2 schema
         return True
-    
+
     def _normalize_with_data_schema(self, archive: EntryArchive, logger) -> None:
         """Normalization cascade for v2 data schema (archive.data)."""
         from nomad_topology_normalizer.normalizers.topology import TopologyNormalizer
-        
+
         # Initialize results sections
         results = self.entry_archive.results
         if results is None:
             results = self.entry_archive.m_create(Results)
         if results.properties is None:
             results.m_create(Properties)
-        
+
         # Run topology normalizer for v2 schema
         topology_normalizer = TopologyNormalizer()
         topology_normalizer.normalize(archive, logger)
-    
+
     def _normalize_with_legacy(self, archive: EntryArchive, logger) -> None:
         """Normalization cascade for legacy schemas (v1 run schema, old data schemas, etc.).
-        
+
         Delegates to the old ResultsNormalizer from nomad-FAIR which handles all legacy cases.
         """
         # Import and delegate to legacy normalizer
-        from nomad.normalizing.results import ResultsNormalizer as LegacyResultsNormalizer
-        
+        from nomad.normalizing.results import (
+            ResultsNormalizer as LegacyResultsNormalizer,
+        )
+
         # Set section_run for compatibility with legacy code
         try:
             self.section_run = archive.run[0]
         except (AttributeError, IndexError):
             self.section_run = None
-        
+
         # Initialize results sections
         results = self.entry_archive.results
         if results is None:
             results = self.entry_archive.m_create(Results)
         if results.properties is None:
             results.m_create(Properties)
-        
+
         # Run legacy normalization
         if self.section_run:
             self.normalize_run(logger=logger)
@@ -644,15 +655,26 @@ class ResultsNormalizerBase:  # type: ignore[misc]
     def fetch_charge_density(
         self, path: list[str] = ['run', 'calculation', 'density_charge', 'value_hdf5']
     ) -> list[DensityCharge]:
-        return_list: list[DensityCharge] = []
-        if runschema and (
-            hdf5_wrappers := list(traverse_reversed(self.entry_archive, path))
-        ):
-            for hdf5_wrapper in hdf5_wrappers:
-                d = DensityCharge()
-                d.m_set('value_hdf5', hdf5_wrapper.path)
-                return_list.append(d)
-        return return_list
+        """Fetch charge density data.
+
+        TODO: Implement charge density support for v2 data schema.
+        Charge density is not yet available in nomad-simulations outputs.
+        Once nomad-simulations adds DensityCharge property, update this method to:
+        1. Check for archive.data.outputs[-1].density_charge or similar
+        2. Map to results.properties.electronic.density_charge
+
+        For now, this returns empty list for all schemas (legacy support removed).
+        """
+        # TODO: Uncomment and adapt once nomad-simulations has DensityCharge
+        # return_list: list[DensityCharge] = []
+        # if hdf5_wrappers := list(traverse_reversed(self.entry_archive, path)):
+        #     for hdf5_wrapper in hdf5_wrappers:
+        #         d = DensityCharge()
+        #         d.m_set('value_hdf5', hdf5_wrapper.path)
+        #         return_list.append(d)
+        # return return_list
+        pass
+        return []
 
     def resolve_electric_field_gradient(
         self, path: list[str] = ['run', 'calculation', 'electric_field_gradient']
@@ -660,8 +682,13 @@ class ResultsNormalizerBase:  # type: ignore[misc]
         """Returns a section containing the references for the Electric Field Gradient.
         This section is then stored under `archive.results.properties.electronic`.
 
-        This section is populated only when there is a non empty array of
-        `electric_field_gradient.value`.
+        TODO: Implement EFG support for v2 data schema.
+        Electric Field Gradient is not yet available in nomad-simulations outputs.
+        Once nomad-simulations adds ElectricFieldGradient property, update this method to:
+        1. Check for archive.data.outputs[-1].electric_field_gradients or similar
+        2. Map to results.properties.electronic.electric_field_gradient
+
+        For now, this returns empty list for all schemas (legacy support removed).
 
         Args:
             path (list[str]): the path to the electric field gradient section to be extracted
@@ -670,17 +697,20 @@ class ResultsNormalizerBase:  # type: ignore[misc]
         Returns:
             list[ElectricFieldGradient]: the mapped Electric Field Gradient.
         """
-        mapped_data: list[ElectricFieldGradient] = []
-        if stored_data := traverse_reversed(self.entry_archive, path):
-            for data in stored_data:
-                contribution = data.contribution
-                value = data.value
-                if valid_array(value):
-                    results_data = ElectricFieldGradient(
-                        contribution=contribution, value=data
-                    )
-                    mapped_data.insert(0, results_data)
-        return mapped_data
+        # TODO: Uncomment and adapt once nomad-simulations has ElectricFieldGradient
+        # mapped_data: list[ElectricFieldGradient] = []
+        # if stored_data := traverse_reversed(self.entry_archive, path):
+        #     for data in stored_data:
+        #         contribution = data.contribution
+        #         value = data.value
+        #         if valid_array(value):
+        #             results_data = ElectricFieldGradient(
+        #                 contribution=contribution, value=data
+        #             )
+        #             mapped_data.insert(0, results_data)
+        # return mapped_data
+        pass
+        return []
 
     def resolve_spectra(self, path: list[str]) -> list[Spectra] | None:
         """Returns a section containing the references for a Spectra. This section is then
@@ -1672,4 +1702,5 @@ class ResultsNormalizerBase:  # type: ignore[misc]
             )
 
         return shear_modulus
-    pass
+
+
