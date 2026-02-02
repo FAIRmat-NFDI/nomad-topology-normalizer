@@ -8,8 +8,8 @@ from nomad.units import ureg
 from nomad.utils import get_logger
 from nomad_simulations.schema_packages.atoms_state import AtomsState
 from nomad_simulations.schema_packages.general import Simulation
-from nomad_simulations.schema_packages.model_system import AtomicCell, ModelSystem
-from nomad_topology_normalizer.normalizers.normalizer import TopologyNormalizer
+from nomad_simulations.schema_packages.model_system import ModelSystem
+from nomad_topology_normalizer.normalizers.topology import TopologyNormalizer
 
 # from nomad.normalizing.topology import TopologyNormalizer
 # from nomad.utils import get_logger
@@ -23,7 +23,7 @@ def test_topology_calculation_2():
     archive = EntryArchive(metadata=EntryMetadata())
 
     simulation = Simulation()
-    model_system = ModelSystem(name="test_system")
+    model_system = ModelSystem(name='test_system')
 
     # No sub_systems, topology_calculation_2 should return None
     simulation.model_system.append(model_system)
@@ -50,8 +50,8 @@ def test_topology_calculation_2_with_subsystem():
 
     # Create root ModelSystem with subsystems
     root = ModelSystem(
-        name="test_system",
-        type="molecule",
+        name='test_system',
+        type='molecule',
         is_representative=True,
         positions=np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
         * ureg.angstrom,
@@ -59,20 +59,18 @@ def test_topology_calculation_2_with_subsystem():
     )
 
     # Add particle states
-    root.particle_states.append(AtomsState(chemical_symbol="O", atomic_number=8))
-    root.particle_states.append(AtomsState(chemical_symbol="H", atomic_number=1))
-    root.particle_states.append(AtomsState(chemical_symbol="H", atomic_number=1))
+    root.particle_states.append(AtomsState(chemical_symbol='O', atomic_number=8))
+    root.particle_states.append(AtomsState(chemical_symbol='H', atomic_number=1))
+    root.particle_states.append(AtomsState(chemical_symbol='H', atomic_number=1))
 
-    # Add cell
-    cell = AtomicCell()
-    cell.lattice_vectors = np.eye(3) * 10.0 * ureg.angstrom
-    cell.periodic_boundary_conditions = [True, True, True]
-    root.cell.append(cell)
+    # Add cell properties directly to ModelSystem (v2 schema)
+    root.lattice_vectors = np.eye(3) * 10.0 * ureg.angstrom
+    root.periodic_boundary_conditions = [True, True, True]
 
     # Add a subsystem
     subsystem = ModelSystem(
-        name="molecule",
-        branch_label="molecule",
+        name='molecule',
+        branch_label='molecule',
         particle_indices=np.array([0, 1, 2], dtype=np.int32),
     )
     root.sub_systems.append(subsystem)
@@ -105,8 +103,8 @@ def test_topology_calculation_2_nested_subsystems():
 
     # Create root system with 6 atoms (2 water molecules)
     root = ModelSystem(
-        name="test_system",
-        type="molecule",
+        name='test_system',
+        type='molecule',
         is_representative=True,
         positions=np.array(
             [
@@ -123,34 +121,32 @@ def test_topology_calculation_2_nested_subsystems():
     )
 
     # Add particle states
-    particle_data = [("O", 8), ("H", 1), ("H", 1), ("O", 8), ("H", 1), ("H", 1)]
+    particle_data = [('O', 8), ('H', 1), ('H', 1), ('O', 8), ('H', 1), ('H', 1)]
     for symbol, atomic_num in particle_data:
         root.particle_states.append(
             AtomsState(chemical_symbol=symbol, atomic_number=atomic_num)
         )
 
-    # Add cell
-    cell = AtomicCell()
-    cell.lattice_vectors = np.eye(3) * 10.0 * ureg.angstrom
-    cell.periodic_boundary_conditions = [True, True, True]
-    root.cell.append(cell)
+    # Add cell properties directly to ModelSystem (v2 schema)
+    root.lattice_vectors = np.eye(3) * 10.0 * ureg.angstrom
+    root.periodic_boundary_conditions = [True, True, True]
 
     # Add molecule_group containing two molecules
     molecule_group = ModelSystem(
-        name="water_group",
-        branch_label="molecule_group",
+        name='water_group',
+        branch_label='molecule_group',
         particle_indices=np.array([0, 1, 2, 3, 4, 5], dtype=np.int32),
     )
 
     # Add nested molecules within the group
     mol1 = ModelSystem(
-        name="water0",
-        branch_label="molecule",
+        name='water0',
+        branch_label='molecule',
         particle_indices=np.array([0, 1, 2], dtype=np.int32),
     )
     mol2 = ModelSystem(
-        name="water",
-        branch_label="molecule",
+        name='water',
+        branch_label='molecule',
         particle_indices=np.array([3, 4, 5], dtype=np.int32),
     )
     molecule_group.sub_systems.append(mol1)
@@ -186,8 +182,8 @@ def test_topology_calculation_2_multiple_same_label():
 
     # Create root with 6 atoms
     root = ModelSystem(
-        name="test_system",
-        type="molecule",
+        name='test_system',
+        type='molecule',
         is_representative=True,
         positions=np.array(
             [
@@ -204,7 +200,7 @@ def test_topology_calculation_2_multiple_same_label():
     )
 
     # Add particle states
-    particle_data = [("O", 8), ("H", 1), ("H", 1), ("O", 8), ("H", 1), ("H", 1)]
+    particle_data = [('O', 8), ('H', 1), ('H', 1), ('O', 8), ('H', 1), ('H', 1)]
     for symbol, atomic_num in particle_data:
         root.particle_states.append(
             AtomsState(chemical_symbol=symbol, atomic_number=atomic_num)
@@ -212,13 +208,13 @@ def test_topology_calculation_2_multiple_same_label():
 
     # Add two molecules with identical labels
     mol1 = ModelSystem(
-        name="water",
-        branch_label="molecule",
+        name='water',
+        branch_label='molecule',
         particle_indices=np.array([0, 1, 2], dtype=np.int32),
     )
     mol2 = ModelSystem(
-        name="water",
-        branch_label="molecule",
+        name='water',
+        branch_label='molecule',
         particle_indices=np.array([3, 4, 5], dtype=np.int32),
     )
     root.sub_systems.append(mol1)
@@ -238,8 +234,8 @@ def test_topology_calculation_2_multiple_same_label():
     assert result is not None
     # Should have original + one system for label 'water' with multiple instances
     systems_dict = {s.label: s for s in result}
-    assert "water" in systems_dict
-    water_system = systems_dict["water"]
+    assert 'water' in systems_dict
+    water_system = systems_dict['water']
     # Should have 2 instances (indices arrays)
     assert water_system.indices is not None
     n_indices = 2
@@ -252,8 +248,8 @@ def test_topology_calculation_2_branch_label_types():
     archive = EntryArchive(metadata=EntryMetadata())
 
     root = ModelSystem(
-        name="test_system",
-        type="molecule",
+        name='test_system',
+        type='molecule',
         is_representative=True,
         positions=np.array(
             [
@@ -279,18 +275,18 @@ def test_topology_calculation_2_branch_label_types():
 
     # Add particle states
     particle_data = [
-        ("C", 6),
-        ("C", 6),
-        ("H", 1),
-        ("H", 1),
-        ("H", 1),
-        ("H", 1),
-        ("C", 6),
-        ("C", 6),
-        ("H", 1),
-        ("H", 1),
-        ("H", 1),
-        ("H", 1),
+        ('C', 6),
+        ('C', 6),
+        ('H', 1),
+        ('H', 1),
+        ('H', 1),
+        ('H', 1),
+        ('C', 6),
+        ('C', 6),
+        ('H', 1),
+        ('H', 1),
+        ('H', 1),
+        ('H', 1),
     ]
     for symbol, atomic_num in particle_data:
         root.particle_states.append(
@@ -299,20 +295,20 @@ def test_topology_calculation_2_branch_label_types():
 
     # Add monomer_group containing both ethylene molecules
     monomer_group = ModelSystem(
-        name="ethylene_group",
-        branch_label="monomer_group",
+        name='ethylene_group',
+        branch_label='monomer_group',
         particle_indices=np.array(list(range(12)), dtype=np.int32),
     )
 
     # Add monomers within group
     monomer1 = ModelSystem(
-        name="ethylene",
-        branch_label="monomer",
+        name='ethylene',
+        branch_label='monomer',
         particle_indices=np.array([0, 1, 2, 3, 4, 5], dtype=np.int32),
     )
     monomer2 = ModelSystem(
-        name="ethylene",
-        branch_label="monomer",
+        name='ethylene',
+        branch_label='monomer',
         particle_indices=np.array([6, 7, 8, 9, 10, 11], dtype=np.int32),
     )
     monomer_group.sub_systems.append(monomer1)
@@ -335,12 +331,12 @@ def test_topology_calculation_2_branch_label_types():
     systems_dict = {s.label: s for s in result}
 
     # Verify monomer_group created
-    assert "ethylene_group" in systems_dict
-    assert systems_dict["ethylene_group"].structural_type == "group"
+    assert 'ethylene_group' in systems_dict
+    assert systems_dict['ethylene_group'].structural_type == 'group'
 
     # Verify monomers created
-    assert "ethylene" in systems_dict
-    assert systems_dict["ethylene"].building_block == "monomer"
+    assert 'ethylene' in systems_dict
+    assert systems_dict['ethylene'].building_block == 'monomer'
 
 
 def test_topology_calculation_2_no_positions():
@@ -349,20 +345,20 @@ def test_topology_calculation_2_no_positions():
     archive = EntryArchive(metadata=EntryMetadata())
 
     root = ModelSystem(
-        name="test_system",
-        type="molecule",
+        name='test_system',
+        type='molecule',
         is_representative=True,
         n_particles=3,
     )
 
     # Add particle states but NO positions
-    root.particle_states.append(AtomsState(chemical_symbol="O", atomic_number=8))
-    root.particle_states.append(AtomsState(chemical_symbol="H", atomic_number=1))
-    root.particle_states.append(AtomsState(chemical_symbol="H", atomic_number=1))
+    root.particle_states.append(AtomsState(chemical_symbol='O', atomic_number=8))
+    root.particle_states.append(AtomsState(chemical_symbol='H', atomic_number=1))
+    root.particle_states.append(AtomsState(chemical_symbol='H', atomic_number=1))
 
     subsystem = ModelSystem(
-        name="molecule",
-        branch_label="molecule",
+        name='molecule',
+        branch_label='molecule',
         particle_indices=np.array([0, 1, 2], dtype=np.int32),
     )
     root.sub_systems.append(subsystem)
@@ -388,8 +384,8 @@ def test_topology_calculation_2_no_particle_states():
     archive = EntryArchive(metadata=EntryMetadata())
 
     root = ModelSystem(
-        name="test_system",
-        type="molecule",
+        name='test_system',
+        type='molecule',
         is_representative=True,
         positions=np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
         * ureg.angstrom,
@@ -398,8 +394,8 @@ def test_topology_calculation_2_no_particle_states():
     # NO particle_states added
 
     subsystem = ModelSystem(
-        name="molecule",
-        branch_label="molecule",
+        name='molecule',
+        branch_label='molecule',
         particle_indices=np.array([0, 1, 2], dtype=np.int32),
     )
     root.sub_systems.append(subsystem)
@@ -425,8 +421,8 @@ def test_topology_calculation_2_mismatched_label_atom_counts():
     archive = EntryArchive(metadata=EntryMetadata())
 
     root = ModelSystem(
-        name="test_system",
-        type="molecule",
+        name='test_system',
+        type='molecule',
         is_representative=True,
         positions=np.array(
             [
@@ -442,18 +438,18 @@ def test_topology_calculation_2_mismatched_label_atom_counts():
     )
 
     for _ in range(5):
-        root.particle_states.append(AtomsState(chemical_symbol="H", atomic_number=1))
+        root.particle_states.append(AtomsState(chemical_symbol='H', atomic_number=1))
 
     # First molecule with 3 atoms
     mol1 = ModelSystem(
-        name="fragment",
-        branch_label="molecule",
+        name='fragment',
+        branch_label='molecule',
         particle_indices=np.array([0, 1, 2], dtype=np.int32),
     )
     # Second molecule with 2 atoms but same label - should trigger warning
     mol2 = ModelSystem(
-        name="fragment",
-        branch_label="molecule",
+        name='fragment',
+        branch_label='molecule',
         particle_indices=np.array([3, 4], dtype=np.int32),
     )
     root.sub_systems.append(mol1)
@@ -475,8 +471,8 @@ def test_topology_calculation_2_mismatched_label_atom_counts():
 
     # First instance should be stored, second should be rejected
     systems_dict = {s.label: s for s in result}
-    assert "fragment" in systems_dict
-    fragment_system = systems_dict["fragment"]
+    assert 'fragment' in systems_dict
+    fragment_system = systems_dict['fragment']
     # Should only have first instance (3 atoms)
     n_groups, n_indices = 1, 3
     assert len(fragment_system.indices) == n_groups
@@ -490,8 +486,8 @@ def test_topology_calculation_2_cgbead_system():
     archive = EntryArchive(metadata=EntryMetadata())
 
     root = ModelSystem(
-        name="test_system",
-        type="molecule",
+        name='test_system',
+        type='molecule',
         is_representative=True,
         positions=np.array(
             [
@@ -505,17 +501,17 @@ def test_topology_calculation_2_cgbead_system():
     )
 
     # Add coarse-grained beads with explicit masses
-    bead1 = CGBeadState(bead_name="CG_A", mass=100.0 * ureg.amu)
-    bead2 = CGBeadState(bead_name="CG_B", mass=150.0 * ureg.amu)
-    bead3 = CGBeadState(bead_name="CG_C", mass=250.0 * ureg.amu)
+    bead1 = CGBeadState(bead_name='CG_A', mass=100.0 * ureg.amu)
+    bead2 = CGBeadState(bead_name='CG_B', mass=150.0 * ureg.amu)
+    bead3 = CGBeadState(bead_name='CG_C', mass=250.0 * ureg.amu)
     root.particle_states.append(bead1)
     root.particle_states.append(bead2)
     root.particle_states.append(bead3)
 
     # Add subsystem with first two beads (total mass: 250 amu)
     subsystem = ModelSystem(
-        name="cg_molecule",
-        branch_label="molecule",
+        name='cg_molecule',
+        branch_label='molecule',
         particle_indices=np.array([0, 1], dtype=np.int32),
     )
     root.sub_systems.append(subsystem)
@@ -538,10 +534,10 @@ def test_topology_calculation_2_cgbead_system():
     assert result is not None
     assert isinstance(result, list)
     systems_dict = {s.label: s for s in result}
-    assert "cg_molecule" in systems_dict
+    assert 'cg_molecule' in systems_dict
 
     # Check mass-related properties
-    cg_mol = systems_dict["cg_molecule"]
+    cg_mol = systems_dict['cg_molecule']
 
     # Verify n_atoms is set correctly (2 beads)
     n_beads = 2
@@ -562,7 +558,7 @@ def test_topology_calculation_2_cgbead_system():
         assert abs(cg_mol.mass_fraction - expected_mass_fraction) < diff_threshold
 
     # Verify original system also has correct total particles
-    original = systems_dict.get("original")
+    original = systems_dict.get('original')
     if original:
         assert original.n_atoms == n_beads + 1  # 3 beads
 
@@ -607,7 +603,7 @@ def mock_normalizer(
 
 def test_normalizer():
     entry_archive = EntryArchive(
-        metadata=EntryMetadata(), workflow2=Workflow(name="test")
+        metadata=EntryMetadata(), workflow2=Workflow(name='test')
     )
     normalize_all(entry_archive)
-    assert entry_archive.workflow2.name == "test"
+    assert entry_archive.workflow2.name == 'test'

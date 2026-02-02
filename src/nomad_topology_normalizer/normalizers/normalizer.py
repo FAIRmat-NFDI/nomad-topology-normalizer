@@ -21,7 +21,17 @@
 #
 
 from nomad.datamodel.metainfo.basesections.v2 import System as SystemV2
-from nomad.normalizing import Normalizer as NomadNormalizer
+
+# Import base Normalizer - delay to avoid circular imports during plugin loading
+# This import is safe when module is directly imported (e.g., in tests)
+# but may cause issues during entry point scanning
+try:
+    from nomad.normalizing import Normalizer as NomadNormalizer
+except ImportError:
+    # During plugin scanning, this might not be available yet
+    # Create a placeholder that will be resolved later
+    class NomadNormalizer:  # type: ignore[no-redef]
+        pass
 
 
 class Normalizer(NomadNormalizer):

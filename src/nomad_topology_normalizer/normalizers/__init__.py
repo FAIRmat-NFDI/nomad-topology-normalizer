@@ -10,7 +10,8 @@ class TopologyNormalizerEntryPoint(NormalizerEntryPoint):
             TopologyNormalizer,
         )
 
-        return TopologyNormalizer(**self.dict())
+        # Don't pass entry point config as __init__ args - Normalizer doesn't accept them
+        return TopologyNormalizer()
 
 
 topology_normalizer_plugin = TopologyNormalizerEntryPoint(

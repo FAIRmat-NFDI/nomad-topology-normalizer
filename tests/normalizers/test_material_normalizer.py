@@ -8,7 +8,7 @@ from nomad.units import ureg
 from nomad.utils import get_logger
 from nomad_simulations.schema_packages.atoms_state import AtomsState
 from nomad_simulations.schema_packages.general import Simulation
-from nomad_simulations.schema_packages.model_system import AtomicCell, ModelSystem
+from nomad_simulations.schema_packages.model_system import ModelSystem
 
 LOGGER = get_logger(__name__)
 
@@ -23,12 +23,9 @@ def create_test_system(
     system = ModelSystem(is_representative=True)
     system.positions = np.array(positions) * ureg.angstrom
 
-    # Add cell
-    cell = AtomicCell(
-        lattice_vectors=np.array(lattice_vectors) * ureg.angstrom,
-        periodic_boundary_conditions=pbc,
-    )
-    system.cell.append(cell)
+    # Set cell properties directly on ModelSystem (v2 schema)
+    system.lattice_vectors = np.array(lattice_vectors) * ureg.angstrom
+    system.periodic_boundary_conditions = pbc
 
     # Add particle states
     for symbol in chemical_symbols:
@@ -138,7 +135,10 @@ class TestMaterialNormalizer:
 
         # Check if system type reflects 2D nature
         # (actual dimensionality computation happens in topology normalizer)
-        assert system.cell[0].periodic_boundary_conditions == [True, True, False]
+        # In v2 schema, periodic_boundary_conditions is directly on ModelSystem
+        np.testing.assert_array_equal(
+            system.periodic_boundary_conditions, [True, True, False]
+        )
 
     def test_empty_system_handling(self):
         """Test MaterialNormalizer handles empty systems gracefully."""
@@ -148,11 +148,8 @@ class TestMaterialNormalizer:
 
         # Create minimal system without particles
         system = ModelSystem(is_representative=True)
-        cell = AtomicCell(
-            lattice_vectors=np.eye(3) * 10 * ureg.angstrom,
-            periodic_boundary_conditions=[True, True, True],
-        )
-        system.cell.append(cell)
+        system.lattice_vectors = np.eye(3) * 10 * ureg.angstrom
+        system.periodic_boundary_conditions = [True, True, True]
 
         simulation = Simulation()
         simulation.model_system.append(system)
@@ -206,11 +203,8 @@ class TestMaterialNormalizer:
         system = ModelSystem(is_representative=True)
         system.positions = np.array([[0, 0, 0], [1, 0, 0]]) * ureg.angstrom
 
-        cell = AtomicCell(
-            lattice_vectors=np.eye(3) * 10 * ureg.angstrom,
-            periodic_boundary_conditions=[True, True, True],
-        )
-        system.cell.append(cell)
+        system.lattice_vectors = np.eye(3) * 10 * ureg.angstrom
+        system.periodic_boundary_conditions = [True, True, True]
 
         # Add particle states
         for symbol in ['H', 'H']:

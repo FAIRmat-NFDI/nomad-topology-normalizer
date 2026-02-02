@@ -8,7 +8,7 @@ from nomad.units import ureg
 from nomad.utils import get_logger
 from nomad_simulations.schema_packages.atoms_state import AtomsState
 from nomad_simulations.schema_packages.general import Simulation
-from nomad_simulations.schema_packages.model_system import AtomicCell, ModelSystem
+from nomad_simulations.schema_packages.model_system import ModelSystem
 
 from nomad_topology_normalizer.normalizers.topology import TopologyNormalizer
 
@@ -61,11 +61,9 @@ def test_topology_calculation_2_with_subsystem():
     root.particle_states.append(AtomsState(chemical_symbol='H', atomic_number=1))
     root.particle_states.append(AtomsState(chemical_symbol='H', atomic_number=1))
 
-    # Add cell
-    cell = AtomicCell()
-    cell.lattice_vectors = np.eye(3) * 10.0 * ureg.angstrom
-    cell.periodic_boundary_conditions = [True, True, True]
-    root.cell.append(cell)
+    # Add cell properties directly to ModelSystem (v2 schema)
+    root.lattice_vectors = np.eye(3) * 10.0 * ureg.angstrom
+    root.periodic_boundary_conditions = [True, True, True]
 
     # Add a subsystem
     subsystem = ModelSystem(
@@ -127,11 +125,9 @@ def test_topology_calculation_2_nested_subsystems():
             AtomsState(chemical_symbol=symbol, atomic_number=atomic_num)
         )
 
-    # Add cell
-    cell = AtomicCell()
-    cell.lattice_vectors = np.eye(3) * 10.0 * ureg.angstrom
-    cell.periodic_boundary_conditions = [True, True, True]
-    root.cell.append(cell)
+    # Add cell properties directly to ModelSystem (v2 schema)
+    root.lattice_vectors = np.eye(3) * 10.0 * ureg.angstrom
+    root.periodic_boundary_conditions = [True, True, True]
 
     # Add molecule_group containing two molecules
     molecule_group = ModelSystem(
