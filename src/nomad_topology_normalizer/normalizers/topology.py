@@ -181,7 +181,7 @@ def get_topology_original(
     return original
 
 
-def add_system_info_2(
+def add_system_info_2(  # noqa: PLR0912
     system: System,
     topologies: dict[str, System],
     parent_system: 'System | None' = None,
@@ -518,7 +518,7 @@ class TopologyNormalizer(Normalizer):
 
         return result
 
-    def topology_matid(self, material: Material) -> list[SystemV2] | None:
+    def topology_matid(self, material: Material) -> list[SystemV2] | None:  # noqa: PLR0912
         """
         Returns a list of systems that have been identified with MatID.
         """
@@ -575,7 +575,8 @@ class TopologyNormalizer(Normalizer):
                     # minimize false-positive and to limit the time spent on symmetry
                     # calculation.
                     cell = cluster.get_cell()
-                    if len(cell) > 8:
+                    MAX_CELL_ATOMS = 8
+                    if len(cell) > MAX_CELL_ATOMS:
                         self.logger.info(
                             f'cell with many atoms ({len(cell)}) was ignored'
                         )
@@ -610,7 +611,8 @@ class TopologyNormalizer(Normalizer):
                         )
                     else:
                         self.logger.info(
-                            f'material_id {conventional_cell.material_id} could not be verified'
+                            f'material_id {conventional_cell.material_id} '
+                            'could not be verified'
                         )
 
         return list(topology.values())
@@ -763,13 +765,15 @@ class TopologyNormalizer(Normalizer):
             return None
         structural_type = None
         building_block = None
-        if dimensionality == 3:
+        BULK_DIM = 3
+        SURFACE_DIM = 2
+        if dimensionality == BULK_DIM:
             structural_type = 'bulk'
-        elif dimensionality == 2:
-            if n_repeated_directions == 2:
+        elif dimensionality == SURFACE_DIM:
+            if n_repeated_directions == SURFACE_DIM:
                 structural_type = '2D'
                 building_block = '2D material'
-            elif n_repeated_directions == 3:
+            elif n_repeated_directions == BULK_DIM:
                 structural_type = 'surface'
                 building_block = 'surface'
         if not structural_type:

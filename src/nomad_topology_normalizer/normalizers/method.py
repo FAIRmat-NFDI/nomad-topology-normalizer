@@ -21,7 +21,6 @@ from collections import OrderedDict
 
 import numpy as np
 from ase.dft.kpoints import get_monkhorst_pack_size_and_offset, monkhorst_pack
-
 from nomad.config import config
 from nomad.datamodel import ArchiveSection, EntryArchive
 from nomad.datamodel.results import (
@@ -60,6 +59,8 @@ class MethodNormalizer:  # TODO: add normalizer for atom_parameters.label
         self.run = self.entry_archive.run[0]
         self.logger = logger
 
+    # TODO: Refactor this method to reduce complexity (PLR0915: 203 statements)
+    # Consider breaking into smaller methods for different method types (DFT, GW, etc.)
     def method(self) -> Method:
         """Returns the populated results.method section."""
         method = Method()
@@ -93,8 +94,9 @@ class MethodNormalizer:  # TODO: add normalizer for atom_parameters.label
 
         def functional_long_name_from_method():
             """
-            Long form of exchange-correlation functional, list of components and parameters
-            as a string: see https://gitlab.mpcdf.mpg.de/nomad-lab/nomad-meta-info/wikis/metainfo/XC-functional
+            Long form of exchange-correlation functional, list of components
+            and parameters as a string: see
+            https://gitlab.mpcdf.mpg.de/nomad-lab/nomad-meta-info/wikis/metainfo/XC-functional
             """
             if not self.repr_method or not methods:
                 return None
@@ -176,7 +178,8 @@ class MethodNormalizer:  # TODO: add normalizer for atom_parameters.label
             xs_task = self.entry_archive.workflow2.tasks[
                 -1
             ]  # Excited-state (GW or XS) task
-            # Trying to resolve the gs_method and the representative method (repr_method)
+            # Trying to resolve the gs_method and the representative method
+            # (repr_method)
             gs_method = None
             for input in gs_task.task.tasks[-1].inputs:
                 if 'method' in input.name:
@@ -201,7 +204,8 @@ class MethodNormalizer:  # TODO: add normalizer for atom_parameters.label
                         break
             if not xs_method:
                 self.logger.warning(
-                    'Could not resolve the excited-state method section (GW, BSE) from workflow refs.'
+                    'Could not resolve the excited-state method section (GW, '
+                    'BSE) from workflow refs.'
                 )
                 return method
             # Finding the proper workflow method_name
@@ -225,7 +229,8 @@ class MethodNormalizer:  # TODO: add normalizer for atom_parameters.label
         elif n_methods == 1:
             repr_method = methods[0]
             method_name = get_method_name(repr_method)
-        # if several methods have been declared, we need to find the "topmost" method and report it.
+        # if several methods have been declared, we need to find the
+        # "topmost" method and report it.
         elif n_methods > 1:
             # Method referencing another as "core_method". If core method was
             # given, create new merged method containing all the information.
@@ -379,34 +384,36 @@ class MethodNormalizer:  # TODO: add normalizer for atom_parameters.label
                         np.reshape(
                             points, (len(points), np.size(points) // len(points))
                         )
-                    )  # this assumes a gamma-centered grid: we really need the `sampling_method` to be sure
+                    )  # this assumes a gamma-centered grid: we really need
+                    # the `sampling_method` to be sure
                 elif k_mesh.sampling_method == 'Monkhorst-Pack':
                     try:
                         k_mesh.points += monkhorst_pack(k_mesh.grid)
                     except ValueError:
-                        pass  # this is a quick workaround: k_mesh.grid should be symmetry reduced
-        else:
-            if self.run.m_xpath('calculation[-1].eigenvalues[-1].kpoints') is not None:
-                k_mesh = (
-                    self.run.method[-1]
-                    .m_def.all_sub_sections['k_mesh']
-                    .sub_section.section_cls()
-                )
-                self.run.method[-1].k_mesh = k_mesh
-                k_mesh.points = self.run.calculation[-1].eigenvalues[-1].kpoints
-                k_mesh.n_points = (
-                    len(k_mesh.points) if not k_mesh.n_points else k_mesh.n_points
-                )
-                k_mesh.grid = [len(set(k_mesh.points[:, i])) for i in range(3)]
-                if not k_mesh.sampling_method:
-                    try:  # TODO double-check
-                        _, k_grid_offset = get_monkhorst_pack_size_and_offset(
-                            k_mesh.points.real
-                        )
-                        if not k_grid_offset.all():
-                            k_mesh.sampling_method = 'Monkhorst-Pack'
-                    except ValueError:
-                        k_mesh.sampling_method = 'Gamma-centered'
+                        # this is a quick workaround: k_mesh.grid should be
+                        # symmetry reduced
+                        pass
+        elif self.run.m_xpath('calculation[-1].eigenvalues[-1].kpoints') is not None:
+            k_mesh = (
+                self.run.method[-1]
+                .m_def.all_sub_sections['k_mesh']
+                .sub_section.section_cls()
+            )
+            self.run.method[-1].k_mesh = k_mesh
+            k_mesh.points = self.run.calculation[-1].eigenvalues[-1].kpoints
+            k_mesh.n_points = (
+                len(k_mesh.points) if not k_mesh.n_points else k_mesh.n_points
+            )
+            k_mesh.grid = [len(set(k_mesh.points[:, i])) for i in range(3)]
+            if not k_mesh.sampling_method:
+                try:  # TODO double-check
+                    _, k_grid_offset = get_monkhorst_pack_size_and_offset(
+                        k_mesh.points.real
+                    )
+                    if not k_grid_offset.all():
+                        k_mesh.sampling_method = 'Monkhorst-Pack'
+                except ValueError:
+                    k_mesh.sampling_method = 'Gamma-centered'
 
         # Fill the precision section only if self.run.method exist.
         if methods:
@@ -484,7 +491,8 @@ class MethodNormalizer:  # TODO: add normalizer for atom_parameters.label
     ) -> float | None:
         """
         Compute the lowest k_line_density value:
-        k_line_density (for a uniformly spaced grid) is the number of k-points per reciprocal length unit
+        k_line_density (for a uniformly spaced grid) is the number of
+        k-points per reciprocal length unit
         """
         # Check consistency of input
         try:
@@ -507,7 +515,9 @@ class MethodNormalizer:  # TODO: add normalizer for atom_parameters.label
 
 
 class ElectronicMethod(ABC):
-    """Abstract base class for all the specific electronic structure methods (DFT, GW, BSE...)."""
+    """Abstract base class for all the specific electronic structure methods
+    (DFT, GW, BSE...).
+    """
 
     def __init__(
         self,
@@ -893,8 +903,9 @@ class DFTMethod(ElectronicMethod):
         return abbrev_mapping[highest_rung_abbrev]
 
     def exact_exchange_mixing_factor(self, xc_functional_names: list[str]):
-        """Assign the exact exchange mixing factor to `results` section when explicitly stated.
-        Else, fall back on XC functional default."""
+        """Assign the exact exchange mixing factor to `results` section when
+        explicitly stated. Else, fall back on XC functional default.
+        """
 
         def scan_patterns(patterns, xc_name) -> bool:
             return any(x for x in patterns if re.search('_' + x + '$', xc_name))
@@ -927,7 +938,9 @@ class DFTMethod(ElectronicMethod):
 
 
 class ExcitedStateMethod(ElectronicMethod):
-    """ExcitedState (GW, BSE, or DFT+GW, DFT+BSE) Method normalized into results.simulation"""
+    """ExcitedState (GW, BSE, or DFT+GW, DFT+BSE) Method normalized into
+    results.simulation
+    """
 
     def simulation(self) -> Simulation:
         xs: None | GW | BSE = None
@@ -983,7 +996,9 @@ class ExcitedStateMethod(ElectronicMethod):
 
 
 class TBMethod(ElectronicMethod):
-    """TB (Wannier, SlaterKoster, DFTB, xTB) Method normalized into results.simulation"""
+    """TB (Wannier, SlaterKoster, DFTB, xTB) Method normalized into
+    results.simulation
+    """
 
     def simulation(self) -> Simulation:
         simulation = Simulation()
@@ -1162,7 +1177,8 @@ class BasisSetExciting(MethodNormalizerBasisSet):
         """Special case of basis set settings for Exciting code. See list at:
         https://gitlab.mpcdf.mpg.de/nomad-lab/encyclopedia-general/wikis/FHI-visit-preparation
         """
-        # Add the muffin-tin settings for each species ordered alphabetically by atom label
+        # Add the muffin-tin settings for each species ordered alphabetically
+        # by atom label
         try:
             groups = self._repr_system.x_exciting_section_atoms_group
             groups = sorted(

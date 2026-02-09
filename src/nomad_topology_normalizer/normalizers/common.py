@@ -24,7 +24,6 @@ from matid import SymmetryAnalyzer  # pylint: disable=import-error
 from matid.symmetry.wyckoffset import (
     WyckoffSet as WyckoffSetMatID,  # pylint: disable=import-error
 )
-
 from nomad import atomutils
 from nomad.config import config
 from nomad.datamodel.metainfo.system import Atoms as NOMADAtoms
@@ -89,7 +88,8 @@ def species(
             except ValueError:
                 if logger:
                     logger.info(
-                        f'could not identify chemical symbol for atomic number {atomic_number}'
+                        f'could not identify chemical symbol for atomic number '
+                        f'{atomic_number}'
                     )
             else:
                 i_species.chemical_symbols = [symbol]

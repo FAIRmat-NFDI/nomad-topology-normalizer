@@ -39,7 +39,8 @@ class TestMaterialNormalizer:
     """Test MaterialNormalizer with v2 schema data."""
 
     def test_chemical_formula_extraction(self):
-        """Test that MaterialNormalizer extracts chemical_formula.hill from v2 system."""
+        """Test that MaterialNormalizer extracts chemical_formula.hill from v2
+        system."""
         # Create archive with v2 system
         archive = EntryArchive(metadata=EntryMetadata())
         archive.results = Results()
@@ -91,7 +92,8 @@ class TestMaterialNormalizer:
         assert system.chemical_formula.hill == 'Si2'
 
     def test_particle_states_chemical_symbols(self):
-        """Test that MaterialNormalizer can access chemical symbols from particle_states."""
+        """Test that MaterialNormalizer can access chemical symbols from
+        particle_states."""
         archive = EntryArchive(metadata=EntryMetadata())
         archive.results = Results()
         archive.results.material = Material()
@@ -109,7 +111,8 @@ class TestMaterialNormalizer:
         system.normalize(archive, LOGGER)
 
         # Verify particle_states have chemical_symbol
-        assert len(system.particle_states) == 2
+        EXPECTED_PARTICLE_COUNT = 2
+        assert len(system.particle_states) == EXPECTED_PARTICLE_COUNT
         symbols = [state.chemical_symbol for state in system.particle_states]
         assert 'Na' in symbols
         assert 'Cl' in symbols

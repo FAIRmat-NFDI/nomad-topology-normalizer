@@ -25,12 +25,13 @@ from nomad.datamodel.metainfo.basesections.v2 import System as SystemV2
 
 class Normalizer:
     """Helper class providing common functionality for internal normalizers.
-    
+
     NOTE: This is NOT a NOMAD entry point normalizer!
     - This is a utility class used by TopologyNormalizer, MaterialNormalizer, etc.
     - It does NOT inherit from nomad.normalizing.Normalizer (to avoid circular imports)
-    - Only ResultsNormalizer (the actual entry point) inherits from nomad.normalizing.Normalizer
-    
+    - Only ResultsNormalizer (the actual entry point) inherits from
+      nomad.normalizing.Normalizer
+
     The actual entry point ResultsNormalizer is created dynamically in __init__.py
     to avoid circular import issues. See ResultsNormalizerBase for details.
     """
@@ -100,4 +101,3 @@ class Normalizer:
             )
 
         return result
-

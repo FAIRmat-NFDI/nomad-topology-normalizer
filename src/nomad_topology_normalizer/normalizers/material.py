@@ -179,6 +179,8 @@ class MaterialNormalizer:
             classes['compound_class_springer'] = compound_classes
         return classes
 
+    # TODO: Refactor this method to reduce complexity (PLR0915: 81 statements)
+    # Consider breaking into smaller helper functions for different compound types
     def material_name(
         self, symbols: list | np.ndarray, counts: list | np.ndarray
     ) -> str:
@@ -194,7 +196,8 @@ class MaterialNormalizer:
             atomicnumbers = [ase.data.atomic_numbers[i] for i in symbols]
             names = [ase.data.atomic_names[i] for i in atomicnumbers]
 
-            # Non-metal elements are anions in the binary compounds and receive the -ide suffix
+            # Non-metal elements are anions in the binary compounds and
+            # receive the -ide suffix
             if names[1] == 'Antimony':
                 names[1] = names[1][:-1] + 'ide'
             if names[1] == 'Arsenic':
@@ -232,9 +235,10 @@ class MaterialNormalizer:
                 or names[1] == 'Iodide'
                 or names[1] == 'Hydride'
             ):
-                # Non-metals with elements of variable valence, therefore we remove alkaline and
-                # alkaline-earth elements, which have fixed valence
-                # Only the most electronegative non-metals are supposed to make ionic compounds
+                # Non-metals with elements of variable valence, therefore we
+                # remove alkaline and alkaline-earth elements, which have fixed
+                # valence. Only the most electronegative non-metals are supposed
+                # to make ionic compounds
                 if (
                     names[0] != 'Lithium'
                     and names[0] != 'Sodium'

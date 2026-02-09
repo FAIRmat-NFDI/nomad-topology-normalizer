@@ -47,7 +47,8 @@ Plugin Entry Point: results_normalizer_plugin (level 3)
             │
             └─ Legacy Schema → _normalize_with_legacy()
                                   │
-                                  └─ Delegates to nomad.normalizing.results.ResultsNormalizer
+                                  └─ Delegates to
+                                     nomad.normalizing.results.ResultsNormalizer
                                         │
                                         └─ Handles: v1 run schema
                                                     Old data schemas
@@ -140,6 +141,7 @@ from nomad.utils import extract_section, traverse_reversed
 
 from nomad_topology_normalizer.normalizers.common import structures_2d
 from nomad_topology_normalizer.normalizers.method import MethodNormalizer
+
 # Don't import local Normalizer to avoid circular import
 # ResultsNormalizer inherits directly from nomad.normalizing.Normalizer
 
@@ -163,7 +165,8 @@ def isint(value: Any) -> bool:
 
 # CIRCULAR IMPORT WORKAROUND:
 # =========================
-# This class does NOT inherit from nomad.normalizing.Normalizer to avoid circular imports.
+# This class does NOT inherit from nomad.normalizing.Normalizer to avoid
+# circular imports.
 #
 # The Problem:
 # When nomad.normalizing.__init__.py loads entry points, it imports this module.
@@ -179,7 +182,8 @@ def isint(value: Any) -> bool:
 #    dynamically using type() with proper inheritance from nomad.normalizing.Normalizer
 # 3. This ensures nomad.normalizing has finished initializing before we inherit from it
 #
-# See: nomad_topology_normalizer/normalizers/__init__.py::ResultsNormalizerEntryPoint.load()
+# See:
+# nomad_topology_normalizer/normalizers/__init__.py::ResultsNormalizerEntryPoint.load()
 class ResultsNormalizerBase:
     """Results normalizer implementation with schema version detection.
 
@@ -212,7 +216,8 @@ class ResultsNormalizerBase:
             self.logger.info('Using v2 data schema results normalization')
             self._normalize_with_data_schema(archive, self.logger)
         else:
-            # LEGACY PATH: Delegate to legacy normalizer (handles run schema, old data schema, etc.)
+            # LEGACY PATH: Delegate to legacy normalizer (handles run schema,
+            # old data schema, etc.)
             self.logger.info('Falling back to legacy results normalization')
             self._normalize_with_legacy(archive, self.logger)
 
@@ -264,14 +269,13 @@ class ResultsNormalizerBase:
         topology_normalizer.normalize(archive, logger)
 
     def _normalize_with_legacy(self, archive: EntryArchive, logger) -> None:
-        """Normalization cascade for legacy schemas (v1 run schema, old data schemas, etc.).
+        """Normalization cascade for legacy schemas (v1 run schema, old data
+        schemas, etc.).
 
-        Delegates to the old ResultsNormalizer from nomad-FAIR which handles all legacy cases.
+        Delegates to the old ResultsNormalizer from nomad-FAIR which handles
+        all legacy cases.
         """
         # Import and delegate to legacy normalizer
-        from nomad.normalizing.results import (
-            ResultsNormalizer as LegacyResultsNormalizer,
-        )
 
         # Set section_run for compatibility with legacy code
         try:
@@ -364,6 +368,8 @@ class ResultsNormalizerBase:
             spectroscopic.m_add_sub_section(SpectroscopicProperties.spectra, spectra)
 
     def normalize_run(self, logger=None) -> None:
+        from nomad_topology_normalizer.normalizers.material import MaterialNormalizer
+
         # Fetch different information resources from which data is gathered
         repr_system = None
         for section in self.section_run.system:
@@ -510,9 +516,9 @@ class ResultsNormalizerBase:
             - There is a non-empty array of dos_values_normalized.
             - There is a non-empty array of dos_energies.
 
-        NOTE: this function will be eventually deprecated. This is because DOSElectronic refers
-        to an old schema which will be deleted. The new function `resolve_dos` should be the
-        one which persists over time.
+        NOTE: this function will be eventually deprecated. This is because
+        DOSElectronic refers to an old schema which will be deleted. The new
+        function `resolve_dos` should be the one which persists over time.
         """
         dos_sections = extract_section(self.entry_archive, path, full_list=True)
         # The old mapping does not work for the new spin-polarized schema
@@ -534,18 +540,21 @@ class ResultsNormalizerBase:
     def resolve_dos(
         self, path: list[str] = ['run', 'calculation', 'dos_electronic']
     ) -> list[DOSElectronicNew]:
-        """Returns a section containing the references for an electronic DOS. This section
-        is then stored under `archive.results.properties.electronic.dos_electronic_new`.
+        """Returns a section containing the references for an electronic DOS.
+        This section is then stored under
+        `archive.results.properties.electronic.dos_electronic_new`.
 
-        If the calculation is spin-polarized, inside this new section there is a list `data` of
-        length 2 and a boolean `spin_polarized` set to true. It also reference the species-,
-        atom-, and orbital-projected DOS, if these are present.
+        If the calculation is spin-polarized, inside this new section there is
+        a list `data` of length 2 and a boolean `spin_polarized` set to true.
+        It also reference the species-, atom-, and orbital-projected DOS, if
+        these are present.
 
-        This section is populated only when there are non-empty arrays for energies and DOS.total values.
+        This section is populated only when there are non-empty arrays for
+        energies and DOS.total values.
 
         Args:
-            path (list[str]): the path to the dos_electronic section to be extracted from the
-                self.entry_archive.
+            path (list[str]): the path to the dos_electronic section to be
+                extracted from the self.entry_archive.
 
         Returns:
             List[DOSElectronicNew]: the mapped DOS.
@@ -592,15 +601,17 @@ class ResultsNormalizerBase:
     def resolve_greens_functions(
         self, path: list[str] = ['run', 'calculation', 'greens_functions']
     ) -> list[GreensFunctionsElectronic]:
-        """Returns a section containing the references of the electronic Greens functions.
-        This section is then stored under `archive.results.properties.electronic`.
+        """Returns a section containing the references of the electronic Greens
+        functions. This section is then stored under
+        `archive.results.properties.electronic`.
 
-        This section is only populated if there are non-zero values of the tau, Matsubara_freq,
-        or frequencies, and its respective greens_function quantities.
+        This section is only populated if there are non-zero values of the tau,
+        Matsubara_freq, or frequencies, and its respective greens_function
+        quantities.
 
         Args:
-            path (list[str]): the path to the dos_electronic section to be extracted from the
-                self.entry_archive.
+            path (list[str]): the path to the dos_electronic section to be
+                extracted from the self.entry_archive.
 
         Returns:
             List[GreensFunctionsElectronic]: the mapped Greens functions.
@@ -684,15 +695,16 @@ class ResultsNormalizerBase:
 
         TODO: Implement EFG support for v2 data schema.
         Electric Field Gradient is not yet available in nomad-simulations outputs.
-        Once nomad-simulations adds ElectricFieldGradient property, update this method to:
+        Once nomad-simulations adds ElectricFieldGradient property, update
+        this method to:
         1. Check for archive.data.outputs[-1].electric_field_gradients or similar
         2. Map to results.properties.electronic.electric_field_gradient
 
         For now, this returns empty list for all schemas (legacy support removed).
 
         Args:
-            path (list[str]): the path to the electric field gradient section to be extracted
-            from the self.entry_archive.
+            path (list[str]): the path to the electric field gradient section
+                to be extracted from the self.entry_archive.
 
         Returns:
             list[ElectricFieldGradient]: the mapped Electric Field Gradient.
@@ -713,10 +725,11 @@ class ResultsNormalizerBase:
         return []
 
     def resolve_spectra(self, path: list[str]) -> list[Spectra] | None:
-        """Returns a section containing the references for a Spectra. This section is then
-        stored under `archive.results.properties.spectroscopic`.
+        """Returns a section containing the references for a Spectra. This
+        section is then stored under `archive.results.properties.spectroscopic`.
 
-        This section is populated only when there are non-empty arrays for energies and intensities.
+        This section is populated only when there are non-empty arrays for
+        energies and intensities.
 
         Args:
             path (list[str]): the path to the spectra section to be extracted from the
@@ -750,8 +763,9 @@ class ResultsNormalizerBase:
     def resolve_magnetic_shielding(
         self, path: list[str]
     ) -> list[MagneticShielding] | None:
-        """Returns a section containing the references for the (atomic) Magnetic Shielding.
-        This section is then stored under `archive.results.properties.magnetic`.
+        """Returns a section containing the references for the (atomic) Magnetic
+        Shielding. This section is then stored under
+        `archive.results.properties.magnetic`.
 
         This section is populated only when there is a non empty array of
         `magnetic_shielding.value`.
@@ -818,8 +832,8 @@ class ResultsNormalizerBase:
         `magnetic_susceptibility.value`.
 
         Args:
-            path (list[str]): the path to the magnetic susceptibility section to be extracted
-            from the self.entry_archive.
+            path (list[str]): the path to the magnetic susceptibility section
+                to be extracted from the self.entry_archive.
 
         Returns:
             list[MagneticSusceptibility]: the mapped Magnetic Susceptibility.
@@ -841,12 +855,15 @@ class ResultsNormalizerBase:
     def _resolve_workflow_gs_properties(
         self, methods: list[str], properties: list[str]
     ) -> None:
-        """Resolves the ground state (gs) properties passed as a list `properties` (band_gap,
-        band_structure, dos) for a given list of `methods` (dft, gw, tb, maxent).
+        """Resolves the ground state (gs) properties passed as a list
+        `properties` (band_gap, band_structure, dos) for a given list of
+        `methods` (dft, gw, tb, maxent).
 
         Args:
-            methods (list[str]): the list of methods from which the properties are resolved.
-            properties (list[str]): the list of properties to be resolved from `workflow2.results`.
+            methods (list[str]): the list of methods from which the
+                properties are resolved.
+            properties (list[str]): the list of properties to be resolved
+                from `workflow2.results`.
         """
         properties_map = {
             'dos': 'dos_electronic_new',
@@ -872,16 +889,16 @@ class ResultsNormalizerBase:
                     property_list.append(item)
 
     def get_gw_workflow_properties(self) -> None:
-        """Gets the GW workflow (DFT+GW) properties and stores them in the self.electronic_properties
-        dictionary.
+        """Gets the GW workflow (DFT+GW) properties and stores them in the
+        self.electronic_properties dictionary.
         """
         properties = ['band_gap', 'band_structure', 'dos']
         methods = ['dft', 'gw']
         self._resolve_workflow_gs_properties(methods, properties)
 
     def get_tb_workflow_properties(self):
-        """Gets the TB workflow (DFT+TB or GW+TB) properties and stores them in the self.electronic_properties
-        dictionary.
+        """Gets the TB workflow (DFT+TB or GW+TB) properties and stores them
+        in the self.electronic_properties dictionary.
         """
         properties = ['band_gap', 'band_structure', 'dos']
         methods = ['first_principles', 'tb']
@@ -906,8 +923,8 @@ class ResultsNormalizerBase:
             gfs_electronic.append(item)
 
     def get_maxent_workflow_properties(self) -> None:
-        """Gets the MaxEnt workflow (DMFT+MaxEnt) properties and stores them in the self.electronic_properties
-        dictionary.
+        """Gets the MaxEnt workflow (DMFT+MaxEnt) properties and stores them
+        in the self.electronic_properties dictionary.
         """
         properties = ['band_gap', 'dos']
         methods = ['maxent']
@@ -931,12 +948,13 @@ class ResultsNormalizerBase:
                 gfs_electronic.append(item)
 
     def get_xs_workflow_properties(self, spectra: list[Spectra]) -> list[Spectra]:
-        """Gets the XS workflow (DFT+GW+BSE) workflow properties and stores them in self.electronic_properties
-        and in spectra. Then it returns the new Spectra section with the resolved data
+        """Gets the XS workflow (DFT+GW+BSE) workflow properties and stores
+        them in self.electronic_properties and in spectra. Then it returns the
+        new Spectra section with the resolved data
 
         Args:
-            spectra (Union[list[Spectra], None]): the input Spectra section resolved from
-                `archive.run`.
+            spectra (Union[list[Spectra], None]): the input Spectra section
+                resolved from `archive.run`.
 
         Returns:
             Union[List[Spectra], None]: the mapped Spectra from `workflow2.results`.
@@ -1100,7 +1118,7 @@ class ResultsNormalizerBase:
                 pass
         return md
 
-    def trajectory(self) -> list[Trajectory]:
+    def trajectory(self) -> list[Trajectory]:  # noqa: PLR0912, PLR0915
         """Returns a list of trajectories."""
         path = ['workflow2']
         trajs = []
@@ -1300,7 +1318,7 @@ class ResultsNormalizerBase:
 
         return msds
 
-    def properties(
+    def properties(  # noqa: PLR0912, PLR0915
         self, repr_system: ArchiveSection, repr_symmetry: ArchiveSection
     ) -> tuple:
         """Returns a populated Properties subsection."""
@@ -1481,7 +1499,8 @@ class ResultsNormalizerBase:
                 conv_atoms = symmetry_analyzer.get_conventional_system()
                 prim_atoms = symmetry_analyzer.get_primitive_system()
 
-                # For some reason MatID seems to drop the periodicity, reintroduce it here.
+                # For some reason MatID seems to drop the periodicity,
+                # reintroduce it here.
                 conv_atoms.set_pbc(True)
                 prim_atoms.set_pbc(True)
                 try:
@@ -1702,5 +1721,3 @@ class ResultsNormalizerBase:
             )
 
         return shear_modulus
-
-

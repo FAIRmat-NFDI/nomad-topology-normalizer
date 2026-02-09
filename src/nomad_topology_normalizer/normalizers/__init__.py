@@ -12,15 +12,19 @@ class ResultsNormalizerEntryPoint(NormalizerEntryPoint):
     level: int = 3
 
     def load(self):
-        """Load the ResultsNormalizer, creating it dynamically to avoid circular imports.
+        """Load the ResultsNormalizer, creating it dynamically to avoid
+        circular imports.
 
         CIRCULAR IMPORT WORKAROUND:
         This method is called AFTER nomad.normalizing has finished initializing,
         so it's safe to import from nomad.normalizing here.
 
-        We create the ResultsNormalizer class dynamically using type() to combine:
-        1. Proper inheritance from nomad.normalizing.Normalizer (for NOMAD plugin system)
-        2. Implementation from ResultsNormalizerBase (which doesn't inherit to avoid circular import)
+        We create the ResultsNormalizer class dynamically using type() to
+        combine:
+        1. Proper inheritance from nomad.normalizing.Normalizer (for NOMAD
+           plugin system)
+        2. Implementation from ResultsNormalizerBase (which doesn't inherit
+           to avoid circular import)
 
         This pattern ensures:
         - No circular imports during module loading
@@ -34,7 +38,8 @@ class ResultsNormalizerEntryPoint(NormalizerEntryPoint):
         from nomad_topology_normalizer.normalizers.results import ResultsNormalizerBase
 
         # Create the actual class with proper inheritance using type()
-        # This combines BaseNormalizer (proper base class) with ResultsNormalizerBase (implementation)
+        # This combines BaseNormalizer (proper base class) with
+        # ResultsNormalizerBase (implementation)
         ResultsNormalizer = type(
             'ResultsNormalizer',
             (BaseNormalizer,),  # Inherit from nomad.normalizing.Normalizer
@@ -52,5 +57,8 @@ class ResultsNormalizerEntryPoint(NormalizerEntryPoint):
 
 results_normalizer_plugin = ResultsNormalizerEntryPoint(
     name='Results',
-    description='Results normalizer with v2 data schema support and backward compatibility for v1 run schema.',
+    description=(
+        'Results normalizer with v2 data schema support and backward '
+        'compatibility for v1 run schema.'
+    ),
 )
