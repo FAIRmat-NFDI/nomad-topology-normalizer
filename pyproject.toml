@@ -26,6 +26,7 @@ maintainers = [
 license = { file = "LICENSE" }
 dependencies = [
     "nomad-lab>=1.3.0",
+    "nomad-simulations",
     'ase>=3.25.0',
     "python-magic-bin; sys_platform == 'win32'",
 ]
@@ -84,6 +85,11 @@ select = [
 ignore = [
     "F403", # 'from module import *' used; unable to detect undefined names
     "PLC0415", # `import` should be at the top-level of a file
+    "PLR0911", # Too many return statements
+    "PLR0912", # Too many branches
+    "PLR0913", # Too many arguments
+    "PLR0915", # Too many statements
+    "PLR2004", # Magic value used in comparison
 ]
 
 fixable = ["ALL"]
@@ -114,7 +120,7 @@ where = ["src"]
 [project.entry-points.'nomad.plugin']
 
 schema_package_entry_point = "nomad_topology_normalizer.schema_packages:schema_package_entry_point"
-topology_normalizer_plugin = "nomad_topology_normalizer.normalizers:topology_normalizer_plugin"
+results_normalizer_plugin = "nomad_topology_normalizer.normalizers:results_normalizer_plugin"
 
 
 [tool.cruft]

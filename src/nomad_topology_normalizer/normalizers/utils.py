@@ -16,7 +16,8 @@ def throttle_wait():
 
 
 def pub_chem_add_throttle_header(response: requests.Response, message: str = '') -> str:
-    """Function for adding the PubChem PUG API throttling control header to a message."""
+    """Function for adding the PubChem PUG API throttling control header to a
+    message."""
     if 'X-Throttling-Control' in response.headers:
         message += f' (Throttling-Control: {response.headers["X-Throttling-Control"]})'
     return message
@@ -61,8 +62,8 @@ def pub_chem_api_get_synonyms(cid: int) -> requests.Response:
 
 def pub_chem_api_search(path: str, search: str) -> requests.Response:
     """
-    Function for performing a get request to the PubChem PUG API to search the given path
-    for a given string.
+    Function for performing a get request to the PubChem PUG API to search
+    the given path for a given string.
 
     Args:
         path (str): The path (property) to search for.
