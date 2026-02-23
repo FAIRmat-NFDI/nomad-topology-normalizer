@@ -239,11 +239,14 @@ class ResultsNormalizerBase:
             return False
 
         # Check if data has model_system (v2 schema indicator)
-        if not hasattr(archive.data, 'model_system'):
-            return False
+        # if not hasattr(archive.data, 'model_system'):
+        #     return False
 
         # Verify it's using basesections.v2 by checking the class origin
         from nomad.datamodel.metainfo.basesections.v2 import System as SystemV2
+
+        if isinstance(archive.data, SystemV2):
+            return True
 
         # If model_system exists and has items, check if they're v2 System instances
         if hasattr(archive.data, 'model_system') and archive.data.model_system:
