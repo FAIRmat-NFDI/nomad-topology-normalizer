@@ -193,6 +193,7 @@ def add_system_info_2(  # noqa: PLR0912
         topologies: Dict of all topology systems
         parent_system: The parent System with positions and particle_states
     """
+
     def _particle_symbols(states, indices=None) -> list[str]:
         symbols = []
         if not states:
@@ -208,8 +209,9 @@ def add_system_info_2(  # noqa: PLR0912
                 symbols.append(chemical_symbols[state.atomic_number])
         return symbols
 
-    # Root/original node: derive atoms/cell directly from representative v2 ModelSystem.
-    # Keep indices unset because downstream GUI logic uses "no indices" to identify roots.
+    # Root/original node: derive atoms/cell directly from representative
+    # v2 ModelSystem. Keep indices unset because downstream GUI logic uses
+    # "no indices" to identify roots.
     relation = system.system_relation.type if system.system_relation else None
     if relation == 'root' and parent_system is not None:
         try:
@@ -466,7 +468,9 @@ class TopologyNormalizer(Normalizer):
 
             if has_valid_data:
                 topology: dict[str, System] = {}
-                original = get_topology_original(system.particle_states, self.entry_archive)
+                original = get_topology_original(
+                    system.particle_states, self.entry_archive
+                )
                 add_system(original, topology)
                 label_to_indices: dict[str, list] = defaultdict(list)
 
