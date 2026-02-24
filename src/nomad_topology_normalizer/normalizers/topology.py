@@ -193,7 +193,53 @@ def add_system_info_2(  # noqa: PLR0912
         topologies: Dict of all topology systems
         parent_system: The parent System with positions and particle_states
     """
-    # Check if indices are available
+    def _particle_symbols(states, indices=None) -> list[str]:
+        symbols = []
+        if not states:
+            return symbols
+        iterable = range(len(states)) if indices is None else indices
+        for idx in iterable:
+            if idx >= len(states):
+                continue
+            state = states[idx]
+            if state.chemical_symbol:
+                symbols.append(state.chemical_symbol)
+            elif state.atomic_number:
+                symbols.append(chemical_symbols[state.atomic_number])
+        return symbols
+
+    # Root/original node: derive atoms/cell directly from representative v2 ModelSystem.
+    # Keep indices unset because downstream GUI logic uses "no indices" to identify roots.
+    relation = system.system_relation.type if system.system_relation else None
+    if relation == 'root' and parent_system is not None:
+        try:
+            particle_states = parent_system.particle_states
+            if system.n_atoms is None and particle_states:
+                system.n_atoms = len(particle_states)
+
+            ase_atoms = parent_system.to_ase_atoms()
+            if ase_atoms is not None:
+                # `results.System.atoms` exists only if runschema support is available.
+                try:
+                    has_atoms_payload = system.atoms is not None
+                except AttributeError:
+                    has_atoms_payload = True
+                if not has_atoms_payload:
+                    system.atoms = nomad_atoms_from_ase_atoms(ase_atoms)
+                if system.cell is None:
+                    system.cell = cell_from_ase_atoms(ase_atoms)
+
+            symbols = _particle_symbols(particle_states)
+            if symbols:
+                formula = atomutils.Formula(''.join(symbols))
+                if system.chemical_composition_reduced is None:
+                    system.chemical_composition_reduced = formula.format('reduced')
+                if system.chemical_composition_hill is None:
+                    system.chemical_composition_hill = formula.format('hill')
+        except Exception:
+            pass
+
+    # Check if indices are available (required for subsystem-specific info)
     if system.indices is None or len(system.indices) == 0:
         return
 
@@ -209,12 +255,12 @@ def add_system_info_2(  # noqa: PLR0912
             system.atomic_fraction = system.n_atoms / parent.n_atoms
 
     # Populate parent system with system info
-    if not parent_system or not hasattr(parent_system, 'particle_states'):
+    if not parent_system:
         return
 
     try:
         particle_states = parent_system.particle_states
-        positions = getattr(parent_system, 'positions', None)
+        positions = parent_system.positions
 
         if not particle_states or len(particle_states) == 0:
             return
@@ -222,16 +268,7 @@ def add_system_info_2(  # noqa: PLR0912
             return
 
         # Extract symbols for formula calculation
-        symbols = []
-        for idx in first_instance:
-            if idx >= len(particle_states):
-                continue
-            state = particle_states[idx]
-            if hasattr(state, 'chemical_symbol') and state.chemical_symbol:
-                symbols.append(state.chemical_symbol)
-            elif hasattr(state, 'atomic_number') and state.atomic_number:
-                symbols.append(chemical_symbols[state.atomic_number])
-
+        symbols = _particle_symbols(particle_states, first_instance)
         if not symbols:
             return
 
@@ -429,7 +466,7 @@ class TopologyNormalizer(Normalizer):
 
             if has_valid_data:
                 topology: dict[str, System] = {}
-                original = get_topology_original(system.particle_states)
+                original = get_topology_original(system.particle_states, self.entry_archive)
                 add_system(original, topology)
                 label_to_indices: dict[str, list] = defaultdict(list)
 

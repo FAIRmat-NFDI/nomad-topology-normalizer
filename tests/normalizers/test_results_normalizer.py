@@ -121,6 +121,24 @@ def test_data_schema_creates_topology(archive_with_data_schema):
     # This test just verifies the path executes without error
 
 
+def test_data_schema_populates_root_topology_cell_and_atoms(archive_with_data_schema):
+    """Root topology node should expose cell metadata for visualization."""
+    normalizer = ResultsNormalizer()
+
+    normalizer.normalize(archive_with_data_schema, LOGGER)
+
+    topology = archive_with_data_schema.results.material.topology
+    assert topology
+
+    root = topology[0]
+    assert root.label == 'original'
+    assert root.indices is None  # root indices remain implicit in v2 schema
+    assert root.cell is not None
+    assert root.cell.a is not None
+    # Needed by structure visualizer root resolution and subsystem downloads
+    assert getattr(root, 'atoms', None) is not None or getattr(root, 'atoms_ref', None)
+
+
 def test_data_schema_priority_over_run(archive_with_data_schema):
     """Test that v2 data schema takes priority when both schemas present."""
     # Add a mock run section to the data schema archive
