@@ -25,9 +25,9 @@ maintainers = [
 ]
 license = { file = "LICENSE" }
 dependencies = [
-    "nomad-lab>=1.3.0",
-    "nomad-simulations",
-    'ase>=3.25.0',
+    "nomad-lab @ git+https://gitlab.mpcdf.mpg.de/nomad-lab/nomad-FAIR.git@migrate-top-norm",
+    "nomad-simulation-parsers @ git+https://github.com/FAIRmat-NFDI/nomad-parser-plugins-simulation.git@81bc154452c21a680b2e1ff7e43d108a22fe3e55",
+    "ase>=3.25.0",
     "python-magic-bin; sys_platform == 'win32'",
 ]
 

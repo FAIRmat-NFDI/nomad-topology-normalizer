@@ -3,6 +3,7 @@
 import numpy as np
 import pytest
 from nomad.datamodel import EntryArchive, EntryMetadata
+from nomad.datamodel.data import ArchiveSection
 from nomad.datamodel.results import Properties, Results
 from nomad.units import ureg
 from nomad.utils import get_logger
@@ -106,6 +107,36 @@ def test_schema_detection_no_schema(archive_empty, caplog):
     ), 'Should log legacy path as fallback'
 
 
+def test_non_simulation_data_schema_uses_legacy_path(caplog):
+    """Custom archive.data without model_system should not use v2 sim path."""
+    archive = EntryArchive(metadata=EntryMetadata())
+    archive.results = Results()
+    archive.results.properties = Properties()
+
+    class CustomData(ArchiveSection):
+        name = None
+
+    archive.data = CustomData()
+
+    normalizer = ResultsNormalizer()
+    caplog.clear()
+
+    try:
+        normalizer.normalize(archive, LOGGER)
+    except Exception:
+        # Legacy path may still fail depending on environment; routing is
+        # tested via logs.
+        pass
+
+    assert any(
+        'legacy results normalization' in record.message for record in caplog.records
+    ), 'Non-simulation archive.data should use legacy path'
+    assert not any(
+        'v2 data schema results normalization' in record.message
+        for record in caplog.records
+    ), 'Non-simulation archive.data should not use v2 sim path'
+
+
 def test_data_schema_creates_topology(archive_with_data_schema):
     """Test that v2 data schema path creates topology."""
     normalizer = ResultsNormalizer()
@@ -119,6 +150,24 @@ def test_data_schema_creates_topology(archive_with_data_schema):
 
     # Note: Topology creation depends on having proper structure data
     # This test just verifies the path executes without error
+
+
+def test_data_schema_populates_root_topology_cell_and_atoms(archive_with_data_schema):
+    """Root topology node should expose cell metadata for visualization."""
+    normalizer = ResultsNormalizer()
+
+    normalizer.normalize(archive_with_data_schema, LOGGER)
+
+    topology = archive_with_data_schema.results.material.topology
+    assert topology
+
+    root = topology[0]
+    assert root.label == 'original'
+    assert root.indices is None  # root indices remain implicit in v2 schema
+    assert root.cell is not None
+    assert root.cell.a is not None
+    # Needed by structure visualizer root resolution and subsystem downloads
+    assert getattr(root, 'atoms', None) is not None or getattr(root, 'atoms_ref', None)
 
 
 def test_data_schema_priority_over_run(archive_with_data_schema):
@@ -163,6 +212,31 @@ def test_normalize_with_data_schema_calls_topology_normalizer(
 
     # Verify TopologyNormalizer.normalize was called
     assert len(normalize_called) > 0, 'TopologyNormalizer.normalize should be called'
+
+
+def test_legacy_path_delegates_to_nomad_fair_results_normalizer(
+    archive_empty, monkeypatch
+):
+    """Legacy fallback should delegate to nomad-FAIR ResultsNormalizer."""
+    from nomad.normalizing.results import ResultsNormalizer as LegacyResultsNormalizer
+
+    called = []
+    original_normalize = LegacyResultsNormalizer.normalize
+
+    def mock_normalize(self, archive, logger=None):
+        called.append(True)
+        return original_normalize(self, archive, logger)
+
+    monkeypatch.setattr(LegacyResultsNormalizer, 'normalize', mock_normalize)
+
+    normalizer = ResultsNormalizer()
+    try:
+        normalizer.normalize(archive_empty, LOGGER)
+    except Exception:
+        # Legacy normalize may fail in minimal fixture; delegation is what matters.
+        pass
+
+    assert called, 'Legacy ResultsNormalizer.normalize should be delegated to'
 
 
 def test_normalize_measurements_still_works(archive_with_data_schema):

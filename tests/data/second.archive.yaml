@@ -1,0 +1,22 @@
+data:
+  m_def: nomad.datamodel.metainfo.basesections.v2.System
+  sub_systems:
+    - m_def: nomad.datamodel.metainfo.basesections.v2.NestedSubSystem
+      nested_system:
+        m_def: nomad.datamodel.metainfo.basesections.v2.System
+        formula: PbI2
+      subsystem_properties:
+        m_def: nomad.datamodel.metainfo.basesections.v2.SubSystemProperties
+        atomic_fraction: 0.5
+    - m_def: nomad.datamodel.metainfo.basesections.v2.NestedSubSystem
+      nested_system:
+        m_def: nomad.datamodel.metainfo.basesections.v2.System
+        formula: CsI
+      subsystem_properties:
+        m_def: nomad.datamodel.metainfo.basesections.v2.SubSystemProperties
+        atomic_fraction: 0.25
+    - m_def: nomad.datamodel.metainfo.basesections.v2.SubSystem
+      system: "../uploads/TH6iAZB9T9Gf9XdkhErkjA/archive/YwFrjVbyNYREe5INJ9A6NqWogqP-#/data"  # update upload_id and entry_id
+      subsystem_properties:
+        m_def: nomad.datamodel.metainfo.basesections.v2.SubSystemProperties
+        atomic_fraction: 0.25

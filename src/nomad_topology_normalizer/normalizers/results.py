@@ -202,6 +202,7 @@ class ResultsNormalizerBase:
 
     def normalize(self, archive: EntryArchive, logger=None) -> None:
         self.entry_archive = archive
+        legacy_delegated = False
 
         # Setup logger
         if logger is not None:
@@ -220,10 +221,12 @@ class ResultsNormalizerBase:
             # old data schema, etc.)
             self.logger.info('Falling back to legacy results normalization')
             self._normalize_with_legacy(archive, self.logger)
+            legacy_delegated = True
 
-        # Always handle measurements (works for both v1 and v2)
-        for measurement in self.entry_archive.measurement:
-            self.normalize_measurement(measurement)
+        # Legacy delegate handles measurements itself.
+        if not legacy_delegated:
+            for measurement in self.entry_archive.measurement:
+                self.normalize_measurement(measurement)
 
         self.entry_archive = None
         self.section_run = None
@@ -238,9 +241,8 @@ class ResultsNormalizerBase:
         if not hasattr(archive, 'data') or archive.data is None:
             return False
 
-        # Check if data has model_system (v2 schema indicator)
-        # if not hasattr(archive.data, 'model_system'):
-        #     return False
+        # Check if data has model_system (Simulation-style v2 schema indicator)
+        has_model_system = hasattr(archive.data, 'model_system')
 
         # Verify it's using basesections.v2 by checking the class origin
         from nomad.datamodel.metainfo.basesections.v2 import System as SystemV2
@@ -249,12 +251,18 @@ class ResultsNormalizerBase:
             return True
 
         # If model_system exists and has items, check if they're v2 System instances
-        if hasattr(archive.data, 'model_system') and archive.data.model_system:
+        if has_model_system and archive.data.model_system:
             # Check if at least one model_system is a v2 System
             return any(isinstance(sys, SystemV2) for sys in archive.data.model_system)
 
-        # If model_system attribute exists but is empty, still consider it v2 schema
-        return True
+        # If model_system attribute exists but is empty, still consider it v2
+        # schema (e.g. partially parsed Simulation).
+        if has_model_system:
+            return True
+
+        # Non-simulation custom data sections (and any other data without
+        # model_system) must go through the legacy fallback path.
+        return False
 
     def _normalize_with_data_schema(self, archive: EntryArchive, logger) -> None:
         """Normalization cascade for v2 data schema (archive.data)."""
@@ -278,24 +286,12 @@ class ResultsNormalizerBase:
         Delegates to the old ResultsNormalizer from nomad-FAIR which handles
         all legacy cases.
         """
-        # Import and delegate to legacy normalizer
+        from nomad.normalizing.results import (
+            ResultsNormalizer as LegacyResultsNormalizer,
+        )
 
-        # Set section_run for compatibility with legacy code
-        try:
-            self.section_run = archive.run[0]
-        except (AttributeError, IndexError):
-            self.section_run = None
-
-        # Initialize results sections
-        results = self.entry_archive.results
-        if results is None:
-            results = self.entry_archive.m_create(Results)
-        if results.properties is None:
-            results.m_create(Properties)
-
-        # Run legacy normalization
-        if self.section_run:
-            self.normalize_run(logger=logger)
+        legacy_normalizer = LegacyResultsNormalizer()
+        legacy_normalizer.normalize(archive, logger)
 
     def normalize_sample(self, sample) -> None:
         material = self.entry_archive.m_setdefault('results.material')

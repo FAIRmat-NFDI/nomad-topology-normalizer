@@ -1,0 +1,5 @@
+data:
+  m_def: nomad.datamodel.metainfo.basesections.v2.BaseSection
+  formula: CH3NH3I
+  name: test
+  sub_systems: []
