@@ -347,7 +347,9 @@ class TopologyNormalizer(Normalizer):
     nomad.normalizing.Normalizer (for plugin compatibility).
     """
 
-    def _initialize_representative_system(self, archive: 'EntryArchive') -> None:
+    def _initialize_representative_system(
+        self, archive: 'EntryArchive', system_v2=None
+    ) -> None:
         """Initialize repr_system, repr_symmetry, and conv_atoms.
 
         Uses v2 data schema (SystemV2/Simulation) only.
@@ -359,6 +361,8 @@ class TopologyNormalizer(Normalizer):
 
         # Get representative system from data
         self.repr_system = self._representative_system(archive)
+        if self.repr_system is None and system_v2 is not None:
+            self.repr_system = system_v2
 
         # Get symmetry from results if available
         self._get_symmetry_from_results(archive)
@@ -373,7 +377,9 @@ class TopologyNormalizer(Normalizer):
         except Exception:
             pass
 
-    def normalize(self, archive: 'EntryArchive', logger: 'BoundLogger') -> None:
+    def normalize(
+        self, archive: 'EntryArchive', logger: 'BoundLogger', system_v2=None
+    ) -> None:
         """
         Main normalization entry point for v2 data schema.
 
@@ -384,7 +390,7 @@ class TopologyNormalizer(Normalizer):
         self.logger = logger
 
         # Initialize representative system and related attributes
-        self._initialize_representative_system(archive)
+        self._initialize_representative_system(archive, system_v2)
 
         if self.entry_archive.results.material is None:
             self.entry_archive.results.material = _MinimalMaterialNormalizer(
@@ -396,11 +402,11 @@ class TopologyNormalizer(Normalizer):
             ).material()
 
         if self.entry_archive.results and self.entry_archive.results.material:
-            topology = self.topology(self.entry_archive.results.material)
+            topology = self.topology(self.entry_archive.results.material, system_v2)
             if topology:
                 self.entry_archive.results.material.topology.extend(topology)
 
-    def topology(self, material) -> list[System] | None:
+    def topology(self, material, system_v2=None) -> list[System] | None:
         """Returns a dictionary that contains all of the topologies mapped by id."""
         # If topology already exists (e.g. written by another normalizer), do
         # not overwrite it.
@@ -418,9 +424,12 @@ class TopologyNormalizer(Normalizer):
 
         # Third: fallback to topology_data for SystemV2 entries
         if topology is None:
-            data = self.entry_archive.data
-            if data and isinstance(data, SystemV2):
-                topology = self.topology_data(data)
+            if system_v2 is not None:
+                topology = self.topology_data(system_v2)
+            else:
+                data = self.entry_archive.data
+                if data and isinstance(data, SystemV2):
+                    topology = self.topology_data(data)
 
         return topology
 
