@@ -210,12 +210,13 @@ class ResultsNormalizerBase:
 
         # ========== LOGICAL SWITCH: v2 basesections vs legacy ==========
         # Check if v2 data schema with basesections.v2 is present
-        has_v2_schema = self._is_v2_data_schema(archive)
+        v2_schema_info = self._is_v2_data_schema(archive)
 
-        if has_v2_schema:
+        if v2_schema_info:
+            system_v2 = v2_schema_info if v2_schema_info is not True else None
             # NEW PATH: Use v2 data schema normalization (this plugin)
             self.logger.info('Using v2 data schema results normalization')
-            self._normalize_with_data_schema(archive, self.logger)
+            self._normalize_with_data_schema(archive, self.logger, system_v2)
         else:
             # LEGACY PATH: Delegate to legacy normalizer (handles run schema,
             # old data schema, etc.)
@@ -231,12 +232,11 @@ class ResultsNormalizerBase:
         self.entry_archive = None
         self.section_run = None
 
-    def _is_v2_data_schema(self, archive: EntryArchive) -> bool:
+    def _is_v2_data_schema(self, archive: EntryArchive) -> Any:
         """Check if archive uses v2 data schema with basesections.v2.
 
-        Returns True if:
-        - archive.data exists
-        - archive.data uses v2 schema classes (ModelSystem from basesections.v2)
+        Returns SystemV2 instance if found, True if indicated by model_system but no
+        instance found, or False.
         """
         if not hasattr(archive, 'data') or archive.data is None:
             return False
@@ -247,13 +247,9 @@ class ResultsNormalizerBase:
         # Verify it's using basesections.v2 by checking the class origin
         from nomad.datamodel.metainfo.basesections.v2 import System as SystemV2
 
-        if isinstance(archive.data, SystemV2):
-            return True
-
-        # If model_system exists and has items, check if they're v2 System instances
-        if has_model_system and archive.data.model_system:
-            # Check if at least one model_system is a v2 System
-            return any(isinstance(sys, SystemV2) for sys in archive.data.model_system)
+        for sec in archive.data.m_all_contents(include_self=True):
+            if isinstance(sec, SystemV2):
+                return sec
 
         # If model_system attribute exists but is empty, still consider it v2
         # schema (e.g. partially parsed Simulation).
@@ -264,7 +260,9 @@ class ResultsNormalizerBase:
         # model_system) must go through the legacy fallback path.
         return False
 
-    def _normalize_with_data_schema(self, archive: EntryArchive, logger) -> None:
+    def _normalize_with_data_schema(
+        self, archive: EntryArchive, logger, system_v2=None
+    ) -> None:
         """Normalization cascade for v2 data schema (archive.data)."""
         from nomad_topology_normalizer.normalizers.topology import TopologyNormalizer
 
@@ -277,7 +275,7 @@ class ResultsNormalizerBase:
 
         # Run topology normalizer for v2 schema
         topology_normalizer = TopologyNormalizer()
-        topology_normalizer.normalize(archive, logger)
+        topology_normalizer.normalize(archive, logger, system_v2=system_v2)
 
     def _normalize_with_legacy(self, archive: EntryArchive, logger) -> None:
         """Normalization cascade for legacy schemas (v1 run schema, old data
