@@ -56,6 +56,45 @@ def archive_with_data_schema():
 
 
 @pytest.fixture
+def archive_with_nested_system():
+    """Create an archive with SystemV2 nested deep in archive.data."""
+    from nomad.metainfo import SubSection
+
+    archive = EntryArchive(metadata=EntryMetadata())
+
+    class Container(ArchiveSection):
+        sub = SubSection(sub_section=ArchiveSection)
+
+    # Create v2 data schema
+    model_system = ModelSystem(
+        name='nested_system',
+        type='molecule',
+        is_representative=True,
+        positions=np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]]) * ureg.angstrom,
+        n_particles=2,
+    )
+    model_system.particle_states.append(
+        AtomsState(chemical_symbol='H', atomic_number=1)
+    )
+    model_system.particle_states.append(
+        AtomsState(chemical_symbol='H', atomic_number=1)
+    )
+    model_system.lattice_vectors = np.eye(3) * 10.0 * ureg.angstrom
+    model_system.periodic_boundary_conditions = [True, True, True]
+
+    # Nest it
+    container = Container()
+    container.sub = model_system
+    archive.data = container
+
+    # Initialize results
+    archive.results = Results()
+    archive.results.properties = Properties()
+
+    return archive
+
+
+@pytest.fixture
 def archive_empty():
     """Create an archive with neither data nor run schema."""
     archive = EntryArchive(metadata=EntryMetadata())
@@ -137,6 +176,24 @@ def test_non_simulation_data_schema_uses_legacy_path(caplog):
     ), 'Non-simulation archive.data should not use v2 sim path'
 
 
+def test_schema_detection_nested_system(archive_with_nested_system, caplog):
+    """Test that nested SystemV2 is detected and causes v2 normalization."""
+    normalizer = ResultsNormalizer()
+    caplog.clear()
+
+    # Run normalization
+    normalizer.normalize(archive_with_nested_system, LOGGER)
+
+    assert any(
+        'v2 data schema results normalization' in record.message
+        for record in caplog.records
+    ), 'Nested SystemV2 should trigger v2 normalization'
+
+    # Check that topology was created (meaning system_v2 was passed correctly)
+    assert archive_with_nested_system.results.material.topology
+    assert archive_with_nested_system.results.material.topology[0].label == 'original'
+
+
 def test_data_schema_creates_topology(archive_with_data_schema):
     """Test that v2 data schema path creates topology."""
     normalizer = ResultsNormalizer()
@@ -200,10 +257,10 @@ def test_normalize_with_data_schema_calls_topology_normalizer(
 
     original_normalize = TopologyNormalizer.normalize
 
-    def mock_normalize(self, archive, logger):
+    def mock_normalize(self, archive, logger, system_v2=None):
         normalize_called.append(True)
         # Call original to avoid breaking the test
-        return original_normalize(self, archive, logger)
+        return original_normalize(self, archive, logger, system_v2=system_v2)
 
     monkeypatch.setattr(TopologyNormalizer, 'normalize', mock_normalize)
 
