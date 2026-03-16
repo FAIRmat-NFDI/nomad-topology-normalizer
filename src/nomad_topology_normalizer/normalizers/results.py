@@ -283,6 +283,7 @@ class ResultsNormalizerBase:
         topology_normalizer = TopologyNormalizer()
         topology_normalizer.normalize(archive, logger, system_v2=system_v2)
         self._normalize_method_with_data_schema(archive)
+        self._normalize_outputs_with_data_schema(archive)
 
     def _normalize_method_with_data_schema(self, archive: EntryArchive) -> None:
         """Populate results.method from v2 Simulation data when available."""
@@ -351,6 +352,382 @@ class ResultsNormalizerBase:
         if method_tokens:
             unique_tokens = list(dict.fromkeys(method_tokens))
             method.method_name = unique_tokens[-1]
+
+    def _map_v2_dos_data(self, dos_section) -> tuple[DOSNew, bool] | None:
+        """Map one v2 ElectronicDensityOfStates section into results DOSNew."""
+        energies_points = getattr(
+            getattr(dos_section, 'energies', None), 'points', None
+        )
+        values = getattr(dos_section, 'value', None)
+        if not valid_array(energies_points) or values is None:
+            return None
+        try:
+            if not valid_array(np.array(values.magnitude)):
+                return None
+        except Exception:
+            return None
+
+        # Build expected legacy DOS section types from result schema metadata.
+        energies_type = DOSNew.m_def.all_quantities['energies'].type
+        total_type = DOSNew.m_def.all_quantities['total'].type
+        legacy_dos_cls = energies_type.target_quantity_def.m_parent.section_cls
+        legacy_total_cls = total_type.target_section_def.section_cls
+
+        legacy_dos = legacy_dos_cls()
+        setattr(legacy_dos, energies_type.target_quantity_def.name, energies_points)
+        legacy_total = legacy_total_cls()
+        legacy_total.value = values
+        setattr(legacy_dos, 'total', [legacy_total])
+
+        dos_data = DOSNew()
+        dos_data.energies = legacy_dos
+        dos_data.total = legacy_total
+        dos_data.spin_channel = getattr(dos_section, 'spin_channel', None)
+        energies_origin = getattr(dos_section, 'energies_origin', None)
+        if energies_origin is not None:
+            dos_data.energy_ref = energies_origin
+
+        has_projected = bool(getattr(dos_section, 'projected_dos', None))
+        return dos_data, has_projected
+
+    def _map_v2_band_structure(
+        self, band_structure_section
+    ) -> BandStructureElectronic | None:
+        """Map one v2 ElectronicBandStructure into results BandStructureElectronic."""
+        values = getattr(band_structure_section, 'value', None)
+        if values is None:
+            return None
+        try:
+            if not valid_array(np.array(values.magnitude)):
+                return None
+        except Exception:
+            return None
+
+        segment_type = BandStructureElectronic.m_def.all_quantities['segment'].type
+        segment_cls = segment_type.target_section_def.section_cls
+        segment = segment_cls()
+        energies_array = np.array(values.magnitude)
+        if energies_array.ndim == 0:
+            energies_array = energies_array[np.newaxis, np.newaxis, np.newaxis]
+        elif energies_array.ndim == 1:
+            energies_array = energies_array[np.newaxis, :, np.newaxis]
+        elif energies_array.ndim == 2:
+            energies_array = energies_array[np.newaxis, :, :]
+        segment.energies = energies_array * values.u
+
+        k_points = getattr(
+            getattr(band_structure_section, 'k_path', None), 'points', None
+        )
+        if k_points is not None and valid_array(k_points):
+            segment.kpoints = k_points
+
+        band_structure = BandStructureElectronic()
+        band_structure.segment = [segment]
+        reciprocal_cell = getattr(band_structure_section, 'reciprocal_cell', None)
+        if reciprocal_cell is not None:
+            band_structure_ref_type = BandStructureElectronic.m_def.all_quantities[
+                'reciprocal_cell'
+            ].type
+            band_structure_ref_cls = (
+                band_structure_ref_type.target_quantity_def.m_parent.section_cls
+            )
+            band_structure_ref = band_structure_ref_cls()
+            setattr(
+                band_structure_ref,
+                band_structure_ref_type.target_quantity_def.name,
+                reciprocal_cell,
+            )
+            band_structure.reciprocal_cell = band_structure_ref
+
+        band_structure.spin_polarized = energies_array.shape[0] == 2
+        return band_structure
+
+    def _map_v2_greens_functions(
+        self, output_section
+    ) -> GreensFunctionsElectronic | None:
+        """Map v2 Green's function outputs into GreensFunctionsElectronic."""
+
+        def _to_array_quantity(value):
+            try:
+                array = np.array(value.magnitude)
+            except Exception:
+                return value
+            if array.ndim == 0:
+                return np.array([[array.item()]]) * value.u
+            return value
+
+        def _safe_set(section, name: str, value) -> bool:
+            try:
+                setattr(section, name, value)
+                return True
+            except Exception:
+                self.logger.warning('skipping incompatible greens field', field=name)
+                return False
+
+        gf_type = GreensFunctionsElectronic.m_def.all_quantities['tau'].type
+        gf_cls = gf_type.target_quantity_def.m_parent.section_cls
+        legacy_gf = gf_cls()
+        mapped = False
+
+        for greens in getattr(output_section, 'electronic_greens_functions', []) or []:
+            if (
+                getattr(greens, 'imaginary_time', None) is not None
+                and valid_array(greens.imaginary_time.points)
+                and getattr(greens, 'value', None) is not None
+            ):
+                mapped = (
+                    _safe_set(legacy_gf, 'tau', greens.imaginary_time.points) or mapped
+                )
+                mapped = (
+                    _safe_set(legacy_gf, 'greens_function_tau', greens.value) or mapped
+                )
+            if (
+                getattr(greens, 'matsubara_frequency', None) is not None
+                and valid_array(greens.matsubara_frequency.points)
+                and getattr(greens, 'value', None) is not None
+            ):
+                mapped = (
+                    _safe_set(
+                        legacy_gf, 'matsubara_freq', greens.matsubara_frequency.points
+                    )
+                    or mapped
+                )
+                mapped = (
+                    _safe_set(
+                        legacy_gf,
+                        'greens_function_iw',
+                        _to_array_quantity(greens.value),
+                    )
+                    or mapped
+                )
+            if (
+                getattr(greens, 'real_frequency', None) is not None
+                and valid_array(greens.real_frequency.points)
+                and getattr(greens, 'value', None) is not None
+            ):
+                mapped = (
+                    _safe_set(legacy_gf, 'frequencies', greens.real_frequency.points)
+                    or mapped
+                )
+                mapped = (
+                    _safe_set(
+                        legacy_gf,
+                        'greens_function_freq',
+                        _to_array_quantity(greens.value),
+                    )
+                    or mapped
+                )
+
+        for self_energy in (
+            getattr(output_section, 'electronic_self_energies', []) or []
+        ):
+            if (
+                getattr(self_energy, 'matsubara_frequency', None) is not None
+                and valid_array(self_energy.matsubara_frequency.points)
+                and getattr(self_energy, 'value', None) is not None
+            ):
+                mapped = (
+                    _safe_set(
+                        legacy_gf,
+                        'matsubara_freq',
+                        self_energy.matsubara_frequency.points,
+                    )
+                    or mapped
+                )
+                mapped = (
+                    _safe_set(
+                        legacy_gf,
+                        'self_energy_iw',
+                        _to_array_quantity(self_energy.value),
+                    )
+                    or mapped
+                )
+            if (
+                getattr(self_energy, 'real_frequency', None) is not None
+                and valid_array(self_energy.real_frequency.points)
+                and getattr(self_energy, 'value', None) is not None
+            ):
+                mapped = (
+                    _safe_set(
+                        legacy_gf, 'frequencies', self_energy.real_frequency.points
+                    )
+                    or mapped
+                )
+                mapped = (
+                    _safe_set(
+                        legacy_gf,
+                        'self_energy_freq',
+                        _to_array_quantity(self_energy.value),
+                    )
+                    or mapped
+                )
+
+        for hybridization in (
+            getattr(output_section, 'hybridization_functions', []) or []
+        ):
+            if (
+                getattr(hybridization, 'matsubara_frequency', None) is not None
+                and valid_array(hybridization.matsubara_frequency.points)
+                and getattr(hybridization, 'value', None) is not None
+            ):
+                mapped = (
+                    _safe_set(
+                        legacy_gf,
+                        'matsubara_freq',
+                        hybridization.matsubara_frequency.points,
+                    )
+                    or mapped
+                )
+                mapped = (
+                    _safe_set(
+                        legacy_gf,
+                        'hybridization_function_iw',
+                        _to_array_quantity(hybridization.value),
+                    )
+                    or mapped
+                )
+            if (
+                getattr(hybridization, 'real_frequency', None) is not None
+                and valid_array(hybridization.real_frequency.points)
+                and getattr(hybridization, 'value', None) is not None
+            ):
+                mapped = (
+                    _safe_set(
+                        legacy_gf, 'frequencies', hybridization.real_frequency.points
+                    )
+                    or mapped
+                )
+                mapped = (
+                    _safe_set(
+                        legacy_gf,
+                        'hybridization_function_freq',
+                        _to_array_quantity(hybridization.value),
+                    )
+                    or mapped
+                )
+
+        for qp_weight in getattr(output_section, 'quasiparticle_weights', []) or []:
+            if getattr(qp_weight, 'value', None) is not None and valid_array(
+                np.array(qp_weight.value)
+            ):
+                legacy_gf.quasiparticle_weights = qp_weight.value
+                mapped = True
+
+        chemical_potentials = getattr(output_section, 'chemical_potentials', []) or []
+        if (
+            chemical_potentials
+            and getattr(chemical_potentials[0], 'value', None) is not None
+        ):
+            legacy_gf.chemical_potential = chemical_potentials[0].value
+            mapped = True
+
+        if not mapped:
+            return None
+
+        greens_functions = GreensFunctionsElectronic()
+        if legacy_gf.m_is_set('tau'):
+            greens_functions.tau = legacy_gf
+        if legacy_gf.m_is_set('matsubara_freq'):
+            greens_functions.matsubara_freq = legacy_gf
+        if legacy_gf.m_is_set('frequencies'):
+            greens_functions.frequencies = legacy_gf
+        if legacy_gf.m_is_set('greens_function_tau'):
+            greens_functions.greens_function_tau = legacy_gf
+        if legacy_gf.m_is_set('greens_function_iw'):
+            greens_functions.greens_function_iw = legacy_gf
+        if legacy_gf.m_is_set('self_energy_iw'):
+            greens_functions.self_energy_iw = legacy_gf
+        if legacy_gf.m_is_set('greens_function_freq'):
+            greens_functions.greens_function_freq = legacy_gf
+        if legacy_gf.m_is_set('self_energy_freq'):
+            greens_functions.self_energy_freq = legacy_gf
+        if legacy_gf.m_is_set('hybridization_function_freq'):
+            greens_functions.hybridization_function_freq = legacy_gf
+        if legacy_gf.m_is_set('orbital_occupations'):
+            greens_functions.orbital_occupations = legacy_gf
+        if legacy_gf.m_is_set('quasiparticle_weights'):
+            greens_functions.quasiparticle_weights = legacy_gf
+        if legacy_gf.m_is_set('chemical_potential'):
+            greens_functions.chemical_potential = legacy_gf
+        return greens_functions
+
+    def _normalize_outputs_with_data_schema(self, archive: EntryArchive) -> None:
+        """Map v2 Simulation.outputs into results.properties (minimal slice)."""
+        data = getattr(archive, 'data', None)
+        outputs = getattr(data, 'outputs', None) if data else None
+        if not outputs:
+            return
+
+        properties = archive.results.properties
+        if properties is None:
+            properties = archive.results.m_create(Properties)
+
+        band_gaps: list[BandGap] = []
+        dos_sections: list[DOSElectronicNew] = []
+        band_structures: list[BandStructureElectronic] = []
+        greens_functions: list[GreensFunctionsElectronic] = []
+
+        for output in outputs:
+            for bg in getattr(output, 'electronic_band_gaps', []) or []:
+                if getattr(bg, 'value', None) is None:
+                    continue
+                bg_result = BandGap()
+                bg_result.value = bg.value
+                bg_result.type = getattr(bg, 'type', None)
+                band_gaps.append(bg_result)
+
+            dos_data_sections: list[DOSNew] = []
+            has_projected = False
+            for dos in getattr(output, 'electronic_dos', []) or []:
+                mapped = self._map_v2_dos_data(dos)
+                if mapped is None:
+                    continue
+                dos_data, projected = mapped
+                dos_data_sections.append(dos_data)
+                has_projected = has_projected or projected
+
+            if dos_data_sections:
+                dos_result = DOSElectronicNew()
+                dos_result.spin_polarized = len(dos_data_sections) == 2
+                dos_result.has_projected = has_projected
+                dos_result.data = dos_data_sections
+                dos_sections.append(dos_result)
+
+            for band_structure in (
+                getattr(output, 'electronic_band_structures', []) or []
+            ):
+                mapped_band_structure = self._map_v2_band_structure(band_structure)
+                if mapped_band_structure:
+                    band_structures.append(mapped_band_structure)
+
+            mapped_greens_functions = self._map_v2_greens_functions(output)
+            if mapped_greens_functions:
+                greens_functions.append(mapped_greens_functions)
+
+        if not (
+            band_gaps
+            or dos_sections
+            or band_structures
+            or greens_functions
+        ):
+            return
+
+        electronic = properties.electronic
+        if electronic is None:
+            electronic = properties.m_create(ElectronicProperties)
+
+        for band_gap in band_gaps:
+            electronic.m_add_sub_section(ElectronicProperties.band_gap, band_gap)
+        for dos in dos_sections:
+            electronic.m_add_sub_section(ElectronicProperties.dos_electronic_new, dos)
+        for band_structure in band_structures:
+            electronic.m_add_sub_section(
+                ElectronicProperties.band_structure_electronic, band_structure
+            )
+        for greens in greens_functions:
+            electronic.m_add_sub_section(
+                ElectronicProperties.greens_functions_electronic, greens
+            )
 
     def _normalize_with_legacy(self, archive: EntryArchive, logger) -> None:
         """Normalization cascade for legacy schemas (v1 run schema, old data

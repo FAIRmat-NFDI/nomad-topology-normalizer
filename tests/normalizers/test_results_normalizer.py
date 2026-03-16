@@ -11,6 +11,17 @@ from nomad_simulations.schema_packages.atoms_state import AtomsState
 from nomad_simulations.schema_packages.general import Program, Simulation
 from nomad_simulations.schema_packages.model_method import DFT, TB, ModelMethod
 from nomad_simulations.schema_packages.model_system import ModelSystem
+from nomad_simulations.schema_packages.outputs import Outputs
+from nomad_simulations.schema_packages.properties import (
+    ElectronicBandGap,
+    ElectronicBandStructure,
+    ElectronicDensityOfStates,
+    ElectronicGreensFunction,
+)
+from nomad_simulations.schema_packages.variables import (
+    Energy2,
+    MatsubaraFrequency,
+)
 
 from nomad_topology_normalizer.normalizers.results import (
     ResultsNormalizerBase as ResultsNormalizer,
@@ -310,6 +321,67 @@ def test_data_schema_skips_unsupported_method_names():
     assert archive.results.method.method_name == 'DFT'
     assert archive.results.method.simulation is not None
     assert archive.results.method.simulation.dft is not None
+
+
+def test_data_schema_maps_outputs_electronic_properties():
+    """v2 outputs should map electronic properties into results."""
+    archive = EntryArchive(metadata=EntryMetadata())
+    archive.results = Results()
+    archive.results.properties = Properties()
+
+    simulation = Simulation()
+    simulation.program = Program(name='VASP')
+    simulation.model_method.append(DFT())
+
+    model_system = ModelSystem(
+        name='test_system',
+        type='bulk',
+        is_representative=True,
+        positions=np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]]) * ureg.angstrom,
+        n_particles=2,
+    )
+    model_system.particle_states.append(
+        AtomsState(chemical_symbol='Si', atomic_number=14)
+    )
+    model_system.particle_states.append(
+        AtomsState(chemical_symbol='Si', atomic_number=14)
+    )
+    model_system.lattice_vectors = np.eye(3) * 5.43 * ureg.angstrom
+    model_system.periodic_boundary_conditions = [True, True, True]
+    simulation.model_system.append(model_system)
+
+    output = Outputs()
+    output.electronic_band_gaps.append(ElectronicBandGap(value=1.5 * ureg.eV))
+    dos = ElectronicDensityOfStates(
+        value=np.array([0.1, 0.2, 0.3]) / ureg.eV, spin_channel=0
+    )
+    dos.energies = Energy2(points=np.array([-1.0, 0.0, 1.0]) * ureg.eV)
+    output.electronic_dos.append(dos)
+    band_structure = ElectronicBandStructure(value=np.array([[1.0, 1.1]]) * ureg.eV)
+    output.electronic_band_structures.append(band_structure)
+    greens_function = ElectronicGreensFunction(value=(1.0 + 0.0j) / ureg.eV)
+    greens_function.matsubara_frequency = MatsubaraFrequency(
+        points=np.array([0.1j, 0.2j]) * ureg.eV
+    )
+    output.electronic_greens_functions.append(greens_function)
+    simulation.outputs.append(output)
+    archive.data = simulation
+
+    normalizer = ResultsNormalizer()
+    normalizer.normalize(archive, LOGGER)
+
+    electronic = archive.results.properties.electronic
+    assert electronic is not None
+    assert electronic.band_gap
+    assert electronic.band_gap[0].value is not None
+    assert electronic.dos_electronic_new
+    assert electronic.dos_electronic_new[0].data
+    assert electronic.dos_electronic_new[0].data[0].energies is not None
+    assert electronic.dos_electronic_new[0].data[0].total is not None
+    assert electronic.band_structure_electronic
+    assert electronic.band_structure_electronic[0].segment
+    assert electronic.greens_functions_electronic
+    assert electronic.greens_functions_electronic[0].matsubara_freq is not None
 
 
 def test_data_schema_priority_over_run(archive_with_data_schema):
