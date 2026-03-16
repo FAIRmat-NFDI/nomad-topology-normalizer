@@ -61,7 +61,7 @@ class Normalizer:
                 iscc = workflow.results.calculation_result_ref
                 system = iscc.system_ref
                 if system is not None:
-                    result = iscc
+                    result = system
             except Exception:
                 pass
 

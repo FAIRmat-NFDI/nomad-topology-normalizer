@@ -8,7 +8,8 @@ from nomad.datamodel.results import Properties, Results
 from nomad.units import ureg
 from nomad.utils import get_logger
 from nomad_simulations.schema_packages.atoms_state import AtomsState
-from nomad_simulations.schema_packages.general import Simulation
+from nomad_simulations.schema_packages.general import Program, Simulation
+from nomad_simulations.schema_packages.model_method import DFT, TB, ModelMethod
 from nomad_simulations.schema_packages.model_system import ModelSystem
 
 from nomad_topology_normalizer.normalizers.results import (
@@ -225,6 +226,90 @@ def test_data_schema_populates_root_topology_cell_and_atoms(archive_with_data_sc
     assert root.cell.a is not None
     # Needed by structure visualizer root resolution and subsystem downloads
     assert getattr(root, 'atoms', None) is not None or getattr(root, 'atoms_ref', None)
+
+
+def test_data_schema_populates_method_from_simulation():
+    """v2 Simulation program/model_method should populate results.method."""
+    archive = EntryArchive(metadata=EntryMetadata())
+    archive.results = Results()
+    archive.results.properties = Properties()
+
+    simulation = Simulation()
+    simulation.program = Program(
+        name='VASP', version='6.4.2', version_internal='git-abc123'
+    )
+    simulation.model_method.append(DFT())
+    simulation.model_method.append(TB(type='Wannier'))
+
+    model_system = ModelSystem(
+        name='test_system',
+        type='bulk',
+        is_representative=True,
+        positions=np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]]) * ureg.angstrom,
+        n_particles=2,
+    )
+    model_system.particle_states.append(
+        AtomsState(chemical_symbol='Si', atomic_number=14)
+    )
+    model_system.particle_states.append(
+        AtomsState(chemical_symbol='Si', atomic_number=14)
+    )
+    model_system.lattice_vectors = np.eye(3) * 5.43 * ureg.angstrom
+    model_system.periodic_boundary_conditions = [True, True, True]
+    simulation.model_system.append(model_system)
+
+    archive.data = simulation
+
+    normalizer = ResultsNormalizer()
+    normalizer.normalize(archive, LOGGER)
+
+    assert archive.results.method is not None
+    assert archive.results.method.method_name == 'TB'
+    assert archive.results.method.simulation is not None
+    assert archive.results.method.simulation.program_name == 'VASP'
+    assert archive.results.method.simulation.program_version == '6.4.2'
+    assert archive.results.method.simulation.program_version_internal == 'git-abc123'
+    assert archive.results.method.simulation.dft is not None
+    assert archive.results.method.simulation.tb is not None
+    assert archive.results.method.simulation.tb.type == 'Wannier'
+
+
+def test_data_schema_skips_unsupported_method_names():
+    """Unsupported model methods should be ignored for results.method transfer."""
+    archive = EntryArchive(metadata=EntryMetadata())
+    archive.results = Results()
+    archive.results.properties = Properties()
+
+    simulation = Simulation()
+    simulation.program = Program(name='VASP')
+    simulation.model_method.append(DFT())
+    simulation.model_method.append(ModelMethod(name='HF'))
+
+    model_system = ModelSystem(
+        name='test_system',
+        type='bulk',
+        is_representative=True,
+        positions=np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]]) * ureg.angstrom,
+        n_particles=2,
+    )
+    model_system.particle_states.append(
+        AtomsState(chemical_symbol='Si', atomic_number=14)
+    )
+    model_system.particle_states.append(
+        AtomsState(chemical_symbol='Si', atomic_number=14)
+    )
+    model_system.lattice_vectors = np.eye(3) * 5.43 * ureg.angstrom
+    model_system.periodic_boundary_conditions = [True, True, True]
+    simulation.model_system.append(model_system)
+    archive.data = simulation
+
+    normalizer = ResultsNormalizer()
+    normalizer.normalize(archive, LOGGER)
+
+    assert archive.results.method is not None
+    assert archive.results.method.method_name == 'DFT'
+    assert archive.results.method.simulation is not None
+    assert archive.results.method.simulation.dft is not None
 
 
 def test_data_schema_priority_over_run(archive_with_data_schema):

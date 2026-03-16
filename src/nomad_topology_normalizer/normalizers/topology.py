@@ -61,6 +61,7 @@ from nomad.datamodel.results import SymmetryNew as Symmetry
 # from nomad.normalizing import Normalizer
 from structlog.stdlib import BoundLogger
 
+from nomad_topology_normalizer.normalizers.material import MaterialNormalizer
 from nomad_topology_normalizer.normalizers.normalizer import Normalizer
 
 conventional_description: str = (
@@ -297,49 +298,6 @@ def add_system(
     topologies[system.system_id] = system
 
 
-class _MinimalMaterialNormalizer:
-    """
-    Tiny in-place replacement for MaterialNormalizer with just the fields that
-    TopologyNormalizer.topology(...) cares about.
-
-    - Sets results.material if missing
-    - Fills structural_type from repr_system.type (if available)
-    - Fills dimensionality/building_block from cached classification (if available)
-    """
-
-    def __init__(self, entry_archive, repr_system, repr_symmetry, conv_atoms, logger):
-        self.entry_archive = entry_archive
-        self.repr_system = repr_system
-        self.repr_symmetry = repr_symmetry
-        self.conv_atoms = conv_atoms
-        self.logger = logger
-
-    def material(self) -> Material:
-        # Ensure results.material exists
-        material = self.entry_archive.m_setdefault('results.material')
-
-        # structural_type is what TopologyNormalizer.topology() branches on
-        try:
-            stype = getattr(self.repr_system, 'type', None)
-            if stype:
-                material.structural_type = stype
-        except Exception:
-            pass
-
-        # Optional: Try to preserve existing dimensionality and building_block
-        # from results if already set (e.g., by MaterialNormalizer)
-        # For v2 schema, these should be computed from the data itself
-        try:
-            if hasattr(material, 'dimensionality') and material.dimensionality:
-                pass  # Already set, keep it
-        except Exception:
-            pass
-
-        # We intentionally skip symmetry & material_id, which topology code
-        # does not need
-        return material
-
-
 class TopologyNormalizer(Normalizer):
     """Topology normalizer for material structure analysis.
 
@@ -393,13 +351,17 @@ class TopologyNormalizer(Normalizer):
         self._initialize_representative_system(archive, system_v2)
 
         if self.entry_archive.results.material is None:
-            self.entry_archive.results.material = _MinimalMaterialNormalizer(
+            self.entry_archive.results.material = MaterialNormalizer(
                 self.entry_archive,
                 self.repr_system,
                 self.repr_symmetry,
+                None,  # spg_number unknown at this stage in v2 path
                 self.conv_atoms,
+                None,  # wyckoff_sets unknown at this stage in v2 path
+                self.entry_archive.results.properties,
+                None,  # optimade not used in v2 path
                 logger,
-            ).material()
+            ).material(populate_topology=False)
 
         if self.entry_archive.results and self.entry_archive.results.material:
             topology = self.topology(self.entry_archive.results.material, system_v2)

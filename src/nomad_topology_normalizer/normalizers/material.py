@@ -59,9 +59,11 @@ class MaterialNormalizer:
         self.structural_type = None
         self.logger = logger
 
-    def material(self) -> Material:
+    def material(self, populate_topology: bool = True) -> Material:
         """Returns a populated Material subsection."""
         material = self.entry_archive.m_setdefault('results.material')
+        symbols = None
+        reduced_counts = None
 
         if self.repr_system:
             try:
@@ -77,12 +79,13 @@ class MaterialNormalizer:
                     self.logger.warning(
                         'no chemical formula available on representative system'
                     )
-                    return material
+                else:
+                    formula = Formula(hill_formula)
+                    formula.populate(material, descriptive_format='descriptive')
 
-                formula = Formula(hill_formula)
-                formula.populate(material, descriptive_format='descriptive')
-                self.structural_type = self.repr_system.type
-                material.structural_type = self.repr_system.type
+                self.structural_type = getattr(self.repr_system, 'type', None)
+                if self.structural_type:
+                    material.structural_type = self.structural_type
                 # Get classification from results.material if already set
                 # (TopologyNormalizer runs first and may have set dimensionality)
                 existing_dimensionality = material.dimensionality
@@ -96,9 +99,15 @@ class MaterialNormalizer:
                 building_block_map = {
                     Surface: 'surface',
                     Material2D: '2D material',
+                    'surface': 'surface',
+                    '2D': '2D material',
                 }
                 # Attempt to get building block from system type
-                building_block = building_block_map.get(type(self.repr_system))
+                building_block = building_block_map.get(type(self.repr_system)) or (
+                    building_block_map.get(self.structural_type)
+                    if self.structural_type
+                    else None
+                )
                 if building_block:
                     material.building_block = building_block
 
@@ -132,20 +141,29 @@ class MaterialNormalizer:
         material.symmetry = self.symmetry()
 
         if self.structural_type == 'bulk':
-            material.material_id = material_id_bulk(self.spg_number, self.wyckoff_sets)
+            if self.spg_number is not None and self.wyckoff_sets is not None:
+                material.material_id = material_id_bulk(
+                    self.spg_number, self.wyckoff_sets
+                )
             material.material_name = self.material_name(symbols, reduced_counts)
             classes = self.material_classification()
             if classes:
                 material.functional_type = classes.get('material_class_springer')
                 material.compound_type = classes.get('compound_class_springer')
         if self.structural_type == '2D':
-            material.material_id = material_id_2d(self.spg_number, self.wyckoff_sets)
+            if self.spg_number is not None and self.wyckoff_sets is not None:
+                material.material_id = material_id_2d(
+                    self.spg_number, self.wyckoff_sets
+                )
         elif self.structural_type == '1D':
-            material.material_id = material_id_1d(self.conv_atoms)
+            if self.conv_atoms is not None:
+                material.material_id = material_id_1d(self.conv_atoms)
+
+        if not populate_topology:
+            return material
 
         # Lazy import to avoid circular dependency
         from nomad_topology_normalizer.normalizers.topology import TopologyNormalizer
-
         topology = TopologyNormalizer(
             self.entry_archive,
             self.repr_system,
@@ -378,7 +396,9 @@ class MaterialNormalizer:
         # Fill in prototype information. SystemNormalizer has cached many of
         # the values during it's own analysis. These cached values are used
         # here.
-        proto = self.repr_system.prototype if self.repr_system else None
+        proto = (
+            getattr(self.repr_system, 'prototype', None) if self.repr_system else None
+        )
         proto = proto[0] if proto else None
         if proto:
             # Prototype id and formula

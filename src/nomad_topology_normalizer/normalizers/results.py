@@ -91,6 +91,11 @@ from nomad.datamodel import EntryArchive
 from nomad.datamodel.data import ArchiveSection
 from nomad.datamodel.metainfo.workflow import Workflow
 from nomad.datamodel.results import (
+    BSE,
+    DFT,
+    DMFT,
+    GW,
+    TB,
     BandGap,
     BandGapDeprecated,
     BandStructureElectronic,
@@ -126,6 +131,7 @@ from nomad.datamodel.results import (
     RadiusOfGyration,
     Results,
     ShearModulus,
+    Simulation,
     Spectra,
     SpectraProvenance,
     SpectroscopicProperties,
@@ -276,6 +282,75 @@ class ResultsNormalizerBase:
         # Run topology normalizer for v2 schema
         topology_normalizer = TopologyNormalizer()
         topology_normalizer.normalize(archive, logger, system_v2=system_v2)
+        self._normalize_method_with_data_schema(archive)
+
+    def _normalize_method_with_data_schema(self, archive: EntryArchive) -> None:
+        """Populate results.method from v2 Simulation data when available."""
+        data = getattr(archive, 'data', None)
+        model_methods = getattr(data, 'model_method', None) if data else None
+        if not model_methods:
+            return
+
+        results = archive.results
+        method = results.method
+        if method is None:
+            method = results.m_create(Method)
+
+        if archive.workflow2:
+            method.workflow_name = (
+                archive.workflow2.name
+                if archive.workflow2.name
+                else archive.workflow2.m_def.name
+            )
+
+        simulation = method.simulation
+        if simulation is None:
+            simulation = method.m_create(Simulation)
+
+        program = getattr(data, 'program', None)
+        if program:
+            simulation.program_name = getattr(program, 'name', None)
+            simulation.program_version = getattr(program, 'version', None)
+            simulation.program_version_internal = getattr(
+                program, 'version_internal', None
+            )
+
+        method_name_enum = set(Method.m_def.all_quantities['method_name'].type)
+        method_tokens = []
+        for model_method in model_methods:
+            section_method_type = getattr(
+                getattr(model_method, 'm_def', None), 'name', None
+            )
+            name_method_type = getattr(model_method, 'name', None)
+            method_type = section_method_type
+            if (
+                method_type not in method_name_enum
+                and name_method_type in method_name_enum
+            ):
+                method_type = name_method_type
+            if not method_type:
+                continue
+            if method_type not in method_name_enum:
+                continue
+            method_tokens.append(method_type)
+
+            if method_type == 'DFT' and simulation.dft is None:
+                simulation.dft = DFT()
+            elif method_type == 'TB':
+                if simulation.tb is None:
+                    simulation.tb = TB()
+                if getattr(model_method, 'type', None):
+                    simulation.tb.type = model_method.type
+            elif method_type == 'GW' and simulation.gw is None:
+                simulation.gw = GW()
+            elif method_type == 'BSE' and simulation.bse is None:
+                simulation.bse = BSE()
+            elif method_type == 'DMFT' and simulation.dmft is None:
+                simulation.dmft = DMFT()
+
+        if method_tokens:
+            unique_tokens = list(dict.fromkeys(method_tokens))
+            method.method_name = unique_tokens[-1]
 
     def _normalize_with_legacy(self, archive: EntryArchive, logger) -> None:
         """Normalization cascade for legacy schemas (v1 run schema, old data
