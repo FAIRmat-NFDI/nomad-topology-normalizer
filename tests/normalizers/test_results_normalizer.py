@@ -18,6 +18,7 @@ from nomad_simulations.schema_packages.properties import (
     ElectronicBandStructure,
     ElectronicDensityOfStates,
     ElectronicGreensFunction,
+    TotalForce,
 )
 from nomad_simulations.schema_packages.properties import (
     PotentialEnergy as SimPotentialEnergy,
@@ -407,6 +408,25 @@ def test_data_schema_maps_outputs_electronic_properties():
     assert archive.results.properties.structural.radius_of_gyration
     assert archive.results.properties.thermodynamic is not None
     assert archive.results.properties.thermodynamic.trajectory
+
+
+def test_data_schema_logs_unmapped_output_groups(archive_with_data_schema, caplog):
+    """Unsupported outputs should stay unset and produce a TODO log."""
+    output = Outputs()
+    output.total_forces.append(
+        TotalForce(value=np.array([[1.0, 0.0, 0.0]]) * ureg.newton)
+    )
+    archive_with_data_schema.data.outputs.append(output)
+
+    normalizer = ResultsNormalizer()
+    caplog.clear()
+    normalizer.normalize(archive_with_data_schema, LOGGER)
+
+    properties = archive_with_data_schema.results.properties
+    assert properties.mechanical is None
+    assert properties.vibrational is None
+    assert properties.magnetic is None
+    assert properties.dynamical is None
 
 
 def test_data_schema_priority_over_run(archive_with_data_schema):

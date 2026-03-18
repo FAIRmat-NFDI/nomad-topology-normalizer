@@ -462,6 +462,8 @@ class ResultsNormalizerBase:
             return value
 
         def _safe_set(section, name: str, value) -> bool:
+            if name not in available_fields:
+                return False
             try:
                 setattr(section, name, value)
                 return True
@@ -471,6 +473,7 @@ class ResultsNormalizerBase:
 
         gf_type = GreensFunctionsElectronic.m_def.all_quantities['tau'].type
         gf_cls = gf_type.target_quantity_def.m_parent.section_cls
+        available_fields = set(gf_cls.m_def.all_quantities.keys())
         legacy_gf = gf_cls()
         mapped = False
 
@@ -608,14 +611,15 @@ class ResultsNormalizerBase:
                 hybridization_value = _to_array_quantity(hybridization.value)
                 if hybridization_value is None:
                     continue
-                mapped = (
-                    _safe_set(
-                        legacy_gf,
-                        'hybridization_function_iw',
-                        hybridization_value,
+                if 'hybridization_function_iw' in available_fields:
+                    mapped = (
+                        _safe_set(
+                            legacy_gf,
+                            'hybridization_function_iw',
+                            hybridization_value,
+                        )
+                        or mapped
                     )
-                    or mapped
-                )
             if (
                 getattr(hybridization, 'real_frequency', None) is not None
                 and valid_array(hybridization.real_frequency.points)
@@ -689,12 +693,9 @@ class ResultsNormalizerBase:
         intensities = getattr(spectrum_section, 'value', None)
         if intensities is None:
             return None
-        if hasattr(intensities, 'magnitude'):
-            intensities_array = np.array(intensities.magnitude)
-            intensities_units = str(intensities.u)
-        else:
-            intensities_array = np.array(intensities)
-            intensities_units = 'arbitrary'
+        intensities_array, intensities_units = self._array_and_units(
+            intensities, default_units='arbitrary'
+        )
         if not valid_array(intensities_array):
             return None
         if energies is None or not valid_array(energies):
@@ -717,6 +718,41 @@ class ResultsNormalizerBase:
         rg.value = value
         rg.label = getattr(rg_section, 'name', None) or 'radius_of_gyration'
         return rg
+
+    @staticmethod
+    def _array_and_units(value, default_units: str = '') -> tuple[np.ndarray, str]:
+        if hasattr(value, 'magnitude'):
+            return np.array(value.magnitude), str(value.u)
+        return np.array(value), default_units
+
+    def _log_unmapped_output_groups(self, outputs) -> None:
+        """Log unmapped results groups when potentially relevant outputs are present."""
+        group_sources = {
+            'electronic': [
+                'crystal_field_splittings',
+                'electronic_eigenvalues',
+                'fermi_surfaces',
+                'hopping_matrices',
+                'kinetic_energies',
+                'permittivities',
+            ],
+            'magnetic': [],
+            'vibrational': [],
+            'mechanical': ['total_forces'],
+            'dynamical': [],
+        }
+        counts = {group: 0 for group in group_sources}
+        for output in outputs:
+            for group, fields in group_sources.items():
+                for field in fields:
+                    counts[group] += len(getattr(output, field, []) or [])
+
+        present_counts = {k: v for k, v in counts.items() if v > 0}
+        if present_counts:
+            self.logger.info(
+                'TODO outputs mapping unsupported groups present',
+                counts=present_counts,
+            )
 
     def _normalize_outputs_with_data_schema(self, archive: EntryArchive) -> None:
         """Map v2 Simulation.outputs into results.properties (minimal slice)."""
@@ -883,10 +919,7 @@ class ResultsNormalizerBase:
                     ThermodynamicProperties.trajectory, trajectory
                 )
 
-        self.logger.info(
-            'TODO outputs mapping missing groups: '
-            'magnetic, vibrational, mechanical, dynamical'
-        )
+        self._log_unmapped_output_groups(outputs)
 
     def _normalize_with_legacy(self, archive: EntryArchive, logger) -> None:
         """Normalization cascade for legacy schemas (v1 run schema, old data
