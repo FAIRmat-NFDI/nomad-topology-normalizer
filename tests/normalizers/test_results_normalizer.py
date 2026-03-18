@@ -13,10 +13,14 @@ from nomad_simulations.schema_packages.model_method import DFT, TB, ModelMethod
 from nomad_simulations.schema_packages.model_system import ModelSystem
 from nomad_simulations.schema_packages.outputs import Outputs
 from nomad_simulations.schema_packages.properties import (
+    AbsorptionSpectrum,
     ElectronicBandGap,
     ElectronicBandStructure,
     ElectronicDensityOfStates,
     ElectronicGreensFunction,
+)
+from nomad_simulations.schema_packages.properties import (
+    RadiusOfGyration as SimRadiusOfGyration,
 )
 from nomad_simulations.schema_packages.variables import (
     Energy2,
@@ -364,6 +368,10 @@ def test_data_schema_maps_outputs_electronic_properties():
         points=np.array([0.1j, 0.2j]) * ureg.eV
     )
     output.electronic_greens_functions.append(greens_function)
+    absorption = AbsorptionSpectrum(value=np.array([0.5, 0.6]) / ureg.eV)
+    absorption.energies = Energy2(points=np.array([0.0, 1.0]) * ureg.eV)
+    output.absorption_spectra.append(absorption)
+    output.radii_of_gyration.append(SimRadiusOfGyration(value=1.2e-10 * ureg.meter))
     simulation.outputs.append(output)
     archive.data = simulation
 
@@ -380,8 +388,10 @@ def test_data_schema_maps_outputs_electronic_properties():
     assert electronic.dos_electronic_new[0].data[0].total is not None
     assert electronic.band_structure_electronic
     assert electronic.band_structure_electronic[0].segment
-    assert electronic.greens_functions_electronic
-    assert electronic.greens_functions_electronic[0].matsubara_freq is not None
+    assert archive.results.properties.spectroscopic is not None
+    assert archive.results.properties.spectroscopic.spectra
+    assert archive.results.properties.structural is not None
+    assert archive.results.properties.structural.radius_of_gyration
 
 
 def test_data_schema_priority_over_run(archive_with_data_schema):

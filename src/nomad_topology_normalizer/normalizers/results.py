@@ -452,6 +452,11 @@ class ResultsNormalizerBase:
                 array = np.array(value.magnitude)
             except Exception:
                 return value
+            # TODO(v2->results): Legacy Greens fields have inconsistent/different
+            # shape+dtype expectations vs nomad-simulations complex payloads.
+            # Keep axis/metadata transfer for now and skip complex payload values.
+            if np.iscomplexobj(array):
+                return None
             if array.ndim == 0:
                 return np.array([[array.item()]]) * value.u
             return value
@@ -486,17 +491,24 @@ class ResultsNormalizerBase:
                 and valid_array(greens.matsubara_frequency.points)
                 and getattr(greens, 'value', None) is not None
             ):
-                mapped = (
-                    _safe_set(
-                        legacy_gf, 'matsubara_freq', greens.matsubara_frequency.points
+                matsubara_points = greens.matsubara_frequency.points
+                if np.iscomplexobj(np.array(matsubara_points.magnitude)):
+                    self.logger.warning(
+                        'skipping complex matsubara greens payload in results mapping'
                     )
+                    continue
+                mapped = (
+                    _safe_set(legacy_gf, 'matsubara_freq', matsubara_points)
                     or mapped
                 )
+                greens_value = _to_array_quantity(greens.value)
+                if greens_value is None:
+                    continue
                 mapped = (
                     _safe_set(
                         legacy_gf,
                         'greens_function_iw',
-                        _to_array_quantity(greens.value),
+                        greens_value,
                     )
                     or mapped
                 )
@@ -509,11 +521,14 @@ class ResultsNormalizerBase:
                     _safe_set(legacy_gf, 'frequencies', greens.real_frequency.points)
                     or mapped
                 )
+                greens_value = _to_array_quantity(greens.value)
+                if greens_value is None:
+                    continue
                 mapped = (
                     _safe_set(
                         legacy_gf,
                         'greens_function_freq',
-                        _to_array_quantity(greens.value),
+                        greens_value,
                     )
                     or mapped
                 )
@@ -526,19 +541,25 @@ class ResultsNormalizerBase:
                 and valid_array(self_energy.matsubara_frequency.points)
                 and getattr(self_energy, 'value', None) is not None
             ):
+                matsubara_points = self_energy.matsubara_frequency.points
+                if np.iscomplexobj(np.array(matsubara_points.magnitude)):
+                    continue
                 mapped = (
                     _safe_set(
                         legacy_gf,
                         'matsubara_freq',
-                        self_energy.matsubara_frequency.points,
+                        matsubara_points,
                     )
                     or mapped
                 )
+                self_energy_value = _to_array_quantity(self_energy.value)
+                if self_energy_value is None:
+                    continue
                 mapped = (
                     _safe_set(
                         legacy_gf,
                         'self_energy_iw',
-                        _to_array_quantity(self_energy.value),
+                        self_energy_value,
                     )
                     or mapped
                 )
@@ -553,11 +574,14 @@ class ResultsNormalizerBase:
                     )
                     or mapped
                 )
+                self_energy_value = _to_array_quantity(self_energy.value)
+                if self_energy_value is None:
+                    continue
                 mapped = (
                     _safe_set(
                         legacy_gf,
                         'self_energy_freq',
-                        _to_array_quantity(self_energy.value),
+                        self_energy_value,
                     )
                     or mapped
                 )
@@ -570,19 +594,25 @@ class ResultsNormalizerBase:
                 and valid_array(hybridization.matsubara_frequency.points)
                 and getattr(hybridization, 'value', None) is not None
             ):
+                matsubara_points = hybridization.matsubara_frequency.points
+                if np.iscomplexobj(np.array(matsubara_points.magnitude)):
+                    continue
                 mapped = (
                     _safe_set(
                         legacy_gf,
                         'matsubara_freq',
-                        hybridization.matsubara_frequency.points,
+                        matsubara_points,
                     )
                     or mapped
                 )
+                hybridization_value = _to_array_quantity(hybridization.value)
+                if hybridization_value is None:
+                    continue
                 mapped = (
                     _safe_set(
                         legacy_gf,
                         'hybridization_function_iw',
-                        _to_array_quantity(hybridization.value),
+                        hybridization_value,
                     )
                     or mapped
                 )
@@ -597,11 +627,14 @@ class ResultsNormalizerBase:
                     )
                     or mapped
                 )
+                hybridization_value = _to_array_quantity(hybridization.value)
+                if hybridization_value is None:
+                    continue
                 mapped = (
                     _safe_set(
                         legacy_gf,
                         'hybridization_function_freq',
-                        _to_array_quantity(hybridization.value),
+                        hybridization_value,
                     )
                     or mapped
                 )
@@ -651,6 +684,40 @@ class ResultsNormalizerBase:
             greens_functions.chemical_potential = legacy_gf
         return greens_functions
 
+    def _map_v2_spectrum(self, spectrum_section, spectrum_type: str) -> Spectra | None:
+        energies = getattr(getattr(spectrum_section, 'energies', None), 'points', None)
+        intensities = getattr(spectrum_section, 'value', None)
+        if intensities is None:
+            return None
+        if hasattr(intensities, 'magnitude'):
+            intensities_array = np.array(intensities.magnitude)
+            intensities_units = str(intensities.u)
+        else:
+            intensities_array = np.array(intensities)
+            intensities_units = 'arbitrary'
+        if not valid_array(intensities_array):
+            return None
+        if energies is None or not valid_array(energies):
+            return None
+
+        spectra = Spectra()
+        spectra.type = spectrum_type
+        spectra.label = 'computation'
+        spectra.n_energies = len(energies)
+        spectra.energies = energies
+        spectra.intensities = intensities_array
+        spectra.intensities_units = intensities_units
+        return spectra
+
+    def _map_v2_radius_of_gyration(self, rg_section) -> RadiusOfGyration | None:
+        value = getattr(rg_section, 'value', None)
+        if value is None:
+            return None
+        rg = RadiusOfGyration()
+        rg.value = value
+        rg.label = getattr(rg_section, 'name', None) or 'radius_of_gyration'
+        return rg
+
     def _normalize_outputs_with_data_schema(self, archive: EntryArchive) -> None:
         """Map v2 Simulation.outputs into results.properties (minimal slice)."""
         data = getattr(archive, 'data', None)
@@ -666,6 +733,8 @@ class ResultsNormalizerBase:
         dos_sections: list[DOSElectronicNew] = []
         band_structures: list[BandStructureElectronic] = []
         greens_functions: list[GreensFunctionsElectronic] = []
+        spectra_sections: list[Spectra] = []
+        rg_sections: list[RadiusOfGyration] = []
 
         for output in outputs:
             for bg in getattr(output, 'electronic_band_gaps', []) or []:
@@ -704,11 +773,27 @@ class ResultsNormalizerBase:
             if mapped_greens_functions:
                 greens_functions.append(mapped_greens_functions)
 
+            for absorption in getattr(output, 'absorption_spectra', []) or []:
+                mapped_spectrum = self._map_v2_spectrum(absorption, 'unavailable')
+                if mapped_spectrum:
+                    spectra_sections.append(mapped_spectrum)
+            for xas in getattr(output, 'xas_spectra', []) or []:
+                mapped_spectrum = self._map_v2_spectrum(xas, 'XAS')
+                if mapped_spectrum:
+                    spectra_sections.append(mapped_spectrum)
+
+            for rg in getattr(output, 'radii_of_gyration', []) or []:
+                mapped_rg = self._map_v2_radius_of_gyration(rg)
+                if mapped_rg:
+                    rg_sections.append(mapped_rg)
+
         if not (
             band_gaps
             or dos_sections
             or band_structures
             or greens_functions
+            or spectra_sections
+            or rg_sections
         ):
             return
 
@@ -728,6 +813,24 @@ class ResultsNormalizerBase:
             electronic.m_add_sub_section(
                 ElectronicProperties.greens_functions_electronic, greens
             )
+
+        if spectra_sections:
+            spectroscopic = properties.spectroscopic
+            if spectroscopic is None:
+                spectroscopic = properties.m_create(SpectroscopicProperties)
+            for spectrum in spectra_sections:
+                spectroscopic.m_add_sub_section(
+                    SpectroscopicProperties.spectra, spectrum
+                )
+
+        if rg_sections:
+            structural = properties.structural
+            if structural is None:
+                structural = properties.m_create(StructuralProperties)
+            for rg in rg_sections:
+                structural.m_add_sub_section(
+                    StructuralProperties.radius_of_gyration, rg
+                )
 
     def _normalize_with_legacy(self, archive: EntryArchive, logger) -> None:
         """Normalization cascade for legacy schemas (v1 run schema, old data
