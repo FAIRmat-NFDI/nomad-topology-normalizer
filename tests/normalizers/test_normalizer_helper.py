@@ -21,7 +21,9 @@ def test_representative_system_prefers_workflow_system_ref():
                 calculation_result_ref=SimpleNamespace(system_ref=workflow_system)
             )
         ),
-        data=SimpleNamespace(model_system=[model_system], representative_system_index=0),
+        data=SimpleNamespace(
+            model_system=[model_system], representative_system_index=0
+        ),
     )
 
     result = normalizer._representative_system(archive)
@@ -55,7 +57,9 @@ def test_representative_system_falls_back_to_flagged_system():
     ]
     archive = SimpleNamespace(
         workflow2=None,
-        data=SimpleNamespace(model_system=model_systems, representative_system_index=99),
+        data=SimpleNamespace(
+            model_system=model_systems, representative_system_index=99
+        ),
     )
 
     result = normalizer._representative_system(archive)
@@ -72,10 +76,11 @@ def test_representative_system_falls_back_to_last_system():
     ]
     archive = SimpleNamespace(
         workflow2=None,
-        data=SimpleNamespace(model_system=model_systems, representative_system_index=None),
+        data=SimpleNamespace(
+            model_system=model_systems, representative_system_index=None
+        ),
     )
 
     result = normalizer._representative_system(archive)
 
     assert result is model_systems[-1]
-

@@ -735,8 +735,12 @@ class ResultsNormalizerBase:
         greens_functions: list[GreensFunctionsElectronic] = []
         spectra_sections: list[Spectra] = []
         rg_sections: list[RadiusOfGyration] = []
+        temperature_series: list[float] = []
+        temperature_time: list[float] = []
+        potential_energy_series: list[float] = []
+        potential_energy_time: list[float] = []
 
-        for output in outputs:
+        for index, output in enumerate(outputs):
             for bg in getattr(output, 'electronic_band_gaps', []) or []:
                 if getattr(bg, 'value', None) is None:
                     continue
@@ -787,6 +791,29 @@ class ResultsNormalizerBase:
                 if mapped_rg:
                     rg_sections.append(mapped_rg)
 
+            point_time = getattr(output, 'wall_end', None)
+            if point_time is None:
+                point_time = float(index)
+
+            temperatures = getattr(output, 'temperatures', []) or []
+            if temperatures and getattr(temperatures[0], 'value', None) is not None:
+                temperature_series.append(float(temperatures[0].value.magnitude))
+                temperature_time.append(float(point_time))
+
+            potential_energies = getattr(output, 'potential_energies', []) or []
+            total_energies = getattr(output, 'total_energies', []) or []
+            energy_source = (
+                potential_energies[0]
+                if potential_energies
+                else total_energies[0] if total_energies else None
+            )
+            if (
+                energy_source is not None
+                and getattr(energy_source, 'value', None) is not None
+            ):
+                potential_energy_series.append(float(energy_source.value.magnitude))
+                potential_energy_time.append(float(point_time))
+
         if not (
             band_gaps
             or dos_sections
@@ -794,6 +821,8 @@ class ResultsNormalizerBase:
             or greens_functions
             or spectra_sections
             or rg_sections
+            or temperature_series
+            or potential_energy_series
         ):
             return
 
@@ -831,6 +860,33 @@ class ResultsNormalizerBase:
                 structural.m_add_sub_section(
                     StructuralProperties.radius_of_gyration, rg
                 )
+
+        if temperature_series or potential_energy_series:
+            thermodynamic = properties.thermodynamic
+            if thermodynamic is None:
+                thermodynamic = properties.m_create(ThermodynamicProperties)
+            trajectory = Trajectory()
+            available_properties: list[str] = []
+            if temperature_series:
+                trajectory.temperature = TemperatureDynamic(
+                    value=temperature_series, time=temperature_time
+                )
+                available_properties.append('temperature')
+            if potential_energy_series:
+                trajectory.energy_potential = EnergyDynamic(
+                    value=potential_energy_series, time=potential_energy_time
+                )
+                available_properties.append('energy_potential')
+            if available_properties:
+                trajectory.available_properties = available_properties
+                thermodynamic.m_add_sub_section(
+                    ThermodynamicProperties.trajectory, trajectory
+                )
+
+        self.logger.info(
+            'TODO outputs mapping missing groups: '
+            'magnetic, vibrational, mechanical, dynamical'
+        )
 
     def _normalize_with_legacy(self, archive: EntryArchive, logger) -> None:
         """Normalization cascade for legacy schemas (v1 run schema, old data

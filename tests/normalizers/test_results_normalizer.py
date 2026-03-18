@@ -20,7 +20,13 @@ from nomad_simulations.schema_packages.properties import (
     ElectronicGreensFunction,
 )
 from nomad_simulations.schema_packages.properties import (
+    PotentialEnergy as SimPotentialEnergy,
+)
+from nomad_simulations.schema_packages.properties import (
     RadiusOfGyration as SimRadiusOfGyration,
+)
+from nomad_simulations.schema_packages.properties import (
+    Temperature as SimTemperature,
 )
 from nomad_simulations.schema_packages.variables import (
     Energy2,
@@ -372,7 +378,14 @@ def test_data_schema_maps_outputs_electronic_properties():
     absorption.energies = Energy2(points=np.array([0.0, 1.0]) * ureg.eV)
     output.absorption_spectra.append(absorption)
     output.radii_of_gyration.append(SimRadiusOfGyration(value=1.2e-10 * ureg.meter))
+    output.temperatures.append(SimTemperature(value=300 * ureg.kelvin))
+    output.potential_energies.append(SimPotentialEnergy(value=-5.0 * ureg.eV))
     simulation.outputs.append(output)
+
+    output_2 = Outputs()
+    output_2.temperatures.append(SimTemperature(value=320 * ureg.kelvin))
+    output_2.potential_energies.append(SimPotentialEnergy(value=-4.8 * ureg.eV))
+    simulation.outputs.append(output_2)
     archive.data = simulation
 
     normalizer = ResultsNormalizer()
@@ -392,6 +405,8 @@ def test_data_schema_maps_outputs_electronic_properties():
     assert archive.results.properties.spectroscopic.spectra
     assert archive.results.properties.structural is not None
     assert archive.results.properties.structural.radius_of_gyration
+    assert archive.results.properties.thermodynamic is not None
+    assert archive.results.properties.thermodynamic.trajectory
 
 
 def test_data_schema_priority_over_run(archive_with_data_schema):
