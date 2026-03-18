@@ -777,6 +777,7 @@ class ResultsNormalizerBase:
         potential_energy_time: list[float] = []
 
         for index, output in enumerate(outputs):
+            has_explicit_band_gap = False
             for bg in getattr(output, 'electronic_band_gaps', []) or []:
                 if getattr(bg, 'value', None) is None:
                     continue
@@ -784,6 +785,23 @@ class ResultsNormalizerBase:
                 bg_result.value = bg.value
                 bg_result.type = getattr(bg, 'type', None)
                 band_gaps.append(bg_result)
+                has_explicit_band_gap = True
+
+            if not has_explicit_band_gap:
+                for eigenvalues in getattr(output, 'electronic_eigenvalues', []) or []:
+                    highest_occupied = getattr(eigenvalues, 'highest_occupied', None)
+                    lowest_unoccupied = getattr(eigenvalues, 'lowest_unoccupied', None)
+                    if highest_occupied is None or lowest_unoccupied is None:
+                        continue
+                    try:
+                        value = lowest_unoccupied - highest_occupied
+                    except Exception:
+                        continue
+                    bg_result = BandGap()
+                    bg_result.value = value
+                    bg_result.type = 'direct'
+                    band_gaps.append(bg_result)
+                    break
 
             dos_data_sections: list[DOSNew] = []
             has_projected = False

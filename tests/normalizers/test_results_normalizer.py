@@ -17,6 +17,7 @@ from nomad_simulations.schema_packages.properties import (
     ElectronicBandGap,
     ElectronicBandStructure,
     ElectronicDensityOfStates,
+    ElectronicEigenvalues,
     ElectronicGreensFunction,
     TotalForce,
 )
@@ -408,6 +409,53 @@ def test_data_schema_maps_outputs_electronic_properties():
     assert archive.results.properties.structural.radius_of_gyration
     assert archive.results.properties.thermodynamic is not None
     assert archive.results.properties.thermodynamic.trajectory
+
+
+def test_data_schema_maps_band_gap_from_eigenvalues_fallback():
+    """Band gap should be derived from electronic eigenvalues when needed."""
+    archive = EntryArchive(metadata=EntryMetadata())
+    archive.results = Results()
+    archive.results.properties = Properties()
+
+    simulation = Simulation()
+    simulation.program = Program(name='VASP')
+    simulation.model_method.append(DFT())
+
+    model_system = ModelSystem(
+        name='test_system',
+        type='bulk',
+        is_representative=True,
+        positions=np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]]) * ureg.angstrom,
+        n_particles=2,
+    )
+    model_system.particle_states.append(
+        AtomsState(chemical_symbol='Si', atomic_number=14)
+    )
+    model_system.particle_states.append(
+        AtomsState(chemical_symbol='Si', atomic_number=14)
+    )
+    model_system.lattice_vectors = np.eye(3) * 5.43 * ureg.angstrom
+    model_system.periodic_boundary_conditions = [True, True, True]
+    simulation.model_system.append(model_system)
+
+    output = Outputs()
+    output.electronic_eigenvalues.append(
+        ElectronicEigenvalues(
+            highest_occupied=-0.2 * ureg.eV,
+            lowest_unoccupied=0.4 * ureg.eV,
+        )
+    )
+    simulation.outputs.append(output)
+    archive.data = simulation
+
+    normalizer = ResultsNormalizer()
+    normalizer.normalize(archive, LOGGER)
+
+    electronic = archive.results.properties.electronic
+    assert electronic is not None
+    assert electronic.band_gap
+    assert electronic.band_gap[0].value is not None
+    assert pytest.approx(electronic.band_gap[0].value.to('eV').magnitude) == 0.6
 
 
 def test_data_schema_logs_unmapped_output_groups(archive_with_data_schema, caplog):
