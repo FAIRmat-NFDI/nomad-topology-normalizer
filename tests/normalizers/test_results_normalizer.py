@@ -23,6 +23,9 @@ from nomad_simulations.schema_packages.properties import (
     TotalForce,
 )
 from nomad_simulations.schema_packages.properties import (
+    KineticEnergy as SimKineticEnergy,
+)
+from nomad_simulations.schema_packages.properties import (
     PotentialEnergy as SimPotentialEnergy,
 )
 from nomad_simulations.schema_packages.properties import (
@@ -510,6 +513,49 @@ def test_data_schema_maps_permittivity_to_spectra():
     assert mapped.n_energies == 2
     assert mapped.intensities is not None
     assert mapped.intensities_units == 'F/m'
+
+
+def test_data_schema_maps_kinetic_energy_as_trajectory_fallback():
+    """Kinetic energy should populate trajectory energy as fallback."""
+    archive = EntryArchive(metadata=EntryMetadata())
+    archive.results = Results()
+    archive.results.properties = Properties()
+
+    simulation = Simulation()
+    simulation.program = Program(name='VASP')
+    simulation.model_method.append(DFT())
+
+    model_system = ModelSystem(
+        name='test_system',
+        type='bulk',
+        is_representative=True,
+        positions=np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]]) * ureg.angstrom,
+        n_particles=2,
+    )
+    model_system.particle_states.append(
+        AtomsState(chemical_symbol='Si', atomic_number=14)
+    )
+    model_system.particle_states.append(
+        AtomsState(chemical_symbol='Si', atomic_number=14)
+    )
+    model_system.lattice_vectors = np.eye(3) * 5.43 * ureg.angstrom
+    model_system.periodic_boundary_conditions = [True, True, True]
+    simulation.model_system.append(model_system)
+
+    output = Outputs()
+    output.kinetic_energies.append(SimKineticEnergy(value=1.2 * ureg.eV))
+    simulation.outputs.append(output)
+    archive.data = simulation
+
+    normalizer = ResultsNormalizer()
+    normalizer.normalize(archive, LOGGER)
+
+    trajectory = archive.results.properties.thermodynamic.trajectory[0]
+    assert trajectory.energy_potential is not None
+    assert len(trajectory.energy_potential.value) == 1
+    assert pytest.approx(trajectory.energy_potential.value[0]) == (1.2 * ureg.eV).to(
+        'joule'
+    ).magnitude
 
 
 def test_data_schema_logs_unmapped_output_groups(archive_with_data_schema, caplog):

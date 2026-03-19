@@ -766,7 +766,6 @@ class ResultsNormalizerBase:
                 'electronic_eigenvalues',
                 'fermi_surfaces',
                 'hopping_matrices',
-                'kinetic_energies',
             ],
             'magnetic': [],
             'vibrational': [],
@@ -892,15 +891,24 @@ class ResultsNormalizerBase:
 
             potential_energies = getattr(output, 'potential_energies', []) or []
             total_energies = getattr(output, 'total_energies', []) or []
+            kinetic_energies = getattr(output, 'kinetic_energies', []) or []
             energy_source = (
                 potential_energies[0]
                 if potential_energies
-                else total_energies[0] if total_energies else None
+                else (
+                    total_energies[0]
+                    if total_energies
+                    else kinetic_energies[0] if kinetic_energies else None
+                )
             )
             if (
                 energy_source is not None
                 and getattr(energy_source, 'value', None) is not None
             ):
+                if not potential_energies and not total_energies and kinetic_energies:
+                    self.logger.info(
+                        'using kinetic energy as trajectory energy fallback',
+                    )
                 potential_energy_series.append(float(energy_source.value.magnitude))
                 potential_energy_time.append(float(point_time))
 
