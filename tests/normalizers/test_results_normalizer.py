@@ -9,7 +9,14 @@ from nomad.units import ureg
 from nomad.utils import get_logger
 from nomad_simulations.schema_packages.atoms_state import AtomsState
 from nomad_simulations.schema_packages.general import Program, Simulation
-from nomad_simulations.schema_packages.model_method import DFT, TB, ModelMethod
+from nomad_simulations.schema_packages.model_method import (
+    BSE,
+    DFT,
+    DMFT,
+    GW,
+    ModelMethod,
+    Wannier,
+)
 from nomad_simulations.schema_packages.model_system import ModelSystem
 from nomad_simulations.schema_packages.outputs import Outputs
 from nomad_simulations.schema_packages.properties import (
@@ -261,7 +268,7 @@ def test_data_schema_populates_method_from_simulation():
         name='VASP', version='6.4.2', version_internal='git-abc123'
     )
     simulation.model_method.append(DFT())
-    simulation.model_method.append(TB(type='Wannier'))
+    simulation.model_method.append(Wannier(localization_type='maximally_localized'))
 
     model_system = ModelSystem(
         name='test_system',
@@ -294,6 +301,10 @@ def test_data_schema_populates_method_from_simulation():
     assert archive.results.method.simulation.dft is not None
     assert archive.results.method.simulation.tb is not None
     assert archive.results.method.simulation.tb.type == 'Wannier'
+    assert (
+        archive.results.method.simulation.tb.localization_type
+        == 'maximally_localized'
+    )
 
 
 def test_data_schema_skips_unsupported_method_names():
@@ -332,6 +343,60 @@ def test_data_schema_skips_unsupported_method_names():
     assert archive.results.method.method_name == 'DFT'
     assert archive.results.method.simulation is not None
     assert archive.results.method.simulation.dft is not None
+
+
+def test_data_schema_maps_method_details_for_gw_bse_dmft():
+    """v2 method details should map to legacy-equivalent results fields."""
+    archive = EntryArchive(metadata=EntryMetadata())
+    archive.results = Results()
+    archive.results.properties = Properties()
+
+    simulation = Simulation()
+    simulation.program = Program(name='VASP')
+    simulation.model_method.append(GW(type='G0W0'))
+    simulation.model_method.append(BSE(type='RPA', solver='TDA'))
+    simulation.model_method.append(
+        DMFT(
+            impurity_solver='CT-HYB',
+            magnetic_state='paramagnetic',
+            inverse_temperature=(1.0 / ureg.eV),
+        )
+    )
+
+    model_system = ModelSystem(
+        name='test_system',
+        type='bulk',
+        is_representative=True,
+        positions=np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]]) * ureg.angstrom,
+        n_particles=2,
+    )
+    model_system.particle_states.append(
+        AtomsState(chemical_symbol='Si', atomic_number=14)
+    )
+    model_system.particle_states.append(
+        AtomsState(chemical_symbol='Si', atomic_number=14)
+    )
+    model_system.lattice_vectors = np.eye(3) * 5.43 * ureg.angstrom
+    model_system.periodic_boundary_conditions = [True, True, True]
+    simulation.model_system.append(model_system)
+    archive.data = simulation
+
+    normalizer = ResultsNormalizer()
+    normalizer.normalize(archive, LOGGER)
+
+    method = archive.results.method
+    assert method is not None
+    assert method.method_name == 'DMFT'
+    assert method.simulation is not None
+    assert method.simulation.gw is not None
+    assert method.simulation.gw.type == 'G0W0'
+    assert method.simulation.bse is not None
+    assert method.simulation.bse.type == 'RPA'
+    assert method.simulation.bse.solver == 'TDA'
+    assert method.simulation.dmft is not None
+    assert method.simulation.dmft.impurity_solver_type == 'CT-HYB'
+    assert method.simulation.dmft.magnetic_state == 'paramagnetic'
+    assert method.simulation.dmft.inverse_temperature is not None
 
 
 def test_data_schema_maps_outputs_electronic_properties():

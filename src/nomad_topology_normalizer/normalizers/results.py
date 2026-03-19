@@ -287,6 +287,16 @@ class ResultsNormalizerBase:
 
     def _normalize_method_with_data_schema(self, archive: EntryArchive) -> None:
         """Populate results.method from v2 Simulation data when available."""
+        def _enum_values(section_cls, quantity_name: str) -> set[str]:
+            return set(section_cls.m_def.all_quantities[quantity_name].type)
+
+        def _set_if_enum(target, quantity_name: str, value) -> None:
+            if value is None:
+                return
+            valid_values = _enum_values(type(target), quantity_name)
+            if value in valid_values:
+                setattr(target, quantity_name, value)
+
         data = getattr(archive, 'data', None)
         model_methods = getattr(data, 'model_method', None) if data else None
         if not model_methods:
@@ -318,12 +328,15 @@ class ResultsNormalizerBase:
 
         method_name_enum = set(Method.m_def.all_quantities['method_name'].type)
         method_tokens = []
+        tb_method_subtypes = {'Wannier', 'DFTB', 'xTB', 'SlaterKoster'}
         for model_method in model_methods:
             section_method_type = getattr(
                 getattr(model_method, 'm_def', None), 'name', None
             )
             name_method_type = getattr(model_method, 'name', None)
             method_type = section_method_type
+            if method_type in tb_method_subtypes:
+                method_type = 'TB'
             if (
                 method_type not in method_name_enum
                 and name_method_type in method_name_enum
@@ -340,14 +353,47 @@ class ResultsNormalizerBase:
             elif method_type == 'TB':
                 if simulation.tb is None:
                     simulation.tb = TB()
-                if getattr(model_method, 'type', None):
-                    simulation.tb.type = model_method.type
+                tb_type = getattr(model_method, 'type', None)
+                tb_type_enum = _enum_values(TB, 'type')
+                if (
+                    tb_type not in tb_type_enum
+                    and section_method_type in tb_type_enum
+                ):
+                    tb_type = section_method_type
+                if tb_type is not None:
+                    _set_if_enum(simulation.tb, 'type', tb_type)
+                _set_if_enum(
+                    simulation.tb,
+                    'localization_type',
+                    getattr(model_method, 'localization_type', None),
+                )
             elif method_type == 'GW' and simulation.gw is None:
                 simulation.gw = GW()
+                _set_if_enum(simulation.gw, 'type', getattr(model_method, 'type', None))
             elif method_type == 'BSE' and simulation.bse is None:
                 simulation.bse = BSE()
+                _set_if_enum(
+                    simulation.bse, 'type', getattr(model_method, 'type', None)
+                )
+                _set_if_enum(
+                    simulation.bse, 'solver', getattr(model_method, 'solver', None)
+                )
             elif method_type == 'DMFT' and simulation.dmft is None:
                 simulation.dmft = DMFT()
+                _set_if_enum(
+                    simulation.dmft,
+                    'impurity_solver_type',
+                    getattr(model_method, 'impurity_solver', None),
+                )
+                _set_if_enum(
+                    simulation.dmft,
+                    'magnetic_state',
+                    getattr(model_method, 'magnetic_state', None),
+                )
+                if getattr(model_method, 'inverse_temperature', None) is not None:
+                    simulation.dmft.inverse_temperature = (
+                        model_method.inverse_temperature
+                    )
 
         if method_tokens:
             unique_tokens = list(dict.fromkeys(method_tokens))
