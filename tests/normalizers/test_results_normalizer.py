@@ -19,6 +19,7 @@ from nomad_simulations.schema_packages.properties import (
     ElectronicDensityOfStates,
     ElectronicEigenvalues,
     ElectronicGreensFunction,
+    Permittivity,
     TotalForce,
 )
 from nomad_simulations.schema_packages.properties import (
@@ -32,6 +33,7 @@ from nomad_simulations.schema_packages.properties import (
 )
 from nomad_simulations.schema_packages.variables import (
     Energy2,
+    Frequency,
     MatsubaraFrequency,
 )
 
@@ -456,6 +458,58 @@ def test_data_schema_maps_band_gap_from_eigenvalues_fallback():
     assert electronic.band_gap
     assert electronic.band_gap[0].value is not None
     assert pytest.approx(electronic.band_gap[0].value.to('eV').magnitude) == 0.6
+
+
+def test_data_schema_maps_permittivity_to_spectra():
+    """Dynamic permittivity should map to spectroscopic spectra."""
+    archive = EntryArchive(metadata=EntryMetadata())
+    archive.results = Results()
+    archive.results.properties = Properties()
+
+    simulation = Simulation()
+    simulation.program = Program(name='VASP')
+    simulation.model_method.append(DFT())
+
+    model_system = ModelSystem(
+        name='test_system',
+        type='bulk',
+        is_representative=True,
+        positions=np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]]) * ureg.angstrom,
+        n_particles=2,
+    )
+    model_system.particle_states.append(
+        AtomsState(chemical_symbol='Si', atomic_number=14)
+    )
+    model_system.particle_states.append(
+        AtomsState(chemical_symbol='Si', atomic_number=14)
+    )
+    model_system.lattice_vectors = np.eye(3) * 5.43 * ureg.angstrom
+    model_system.periodic_boundary_conditions = [True, True, True]
+    simulation.model_system.append(model_system)
+
+    output = Outputs()
+    permittivity = Permittivity()
+    permittivity.frequencies = Frequency(points=np.array([1.0, 2.0]) * ureg.eV)
+    permittivity.value = np.array(
+        [
+            [[1 + 0.1j, 0j, 0j], [0j, 1 + 0.2j, 0j], [0j, 0j, 1 + 0.3j]],
+            [[1 + 0.2j, 0j, 0j], [0j, 1 + 0.4j, 0j], [0j, 0j, 1 + 0.6j]],
+        ]
+    )
+    output.permittivities.append(permittivity)
+    simulation.outputs.append(output)
+    archive.data = simulation
+
+    normalizer = ResultsNormalizer()
+    normalizer.normalize(archive, LOGGER)
+
+    spectroscopic = archive.results.properties.spectroscopic
+    assert spectroscopic is not None
+    assert spectroscopic.spectra
+    mapped = spectroscopic.spectra[0]
+    assert mapped.n_energies == 2
+    assert mapped.intensities is not None
+    assert mapped.intensities_units == 'F/m'
 
 
 def test_data_schema_logs_unmapped_output_groups(archive_with_data_schema, caplog):

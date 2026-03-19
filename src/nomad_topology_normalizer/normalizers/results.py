@@ -719,6 +719,39 @@ class ResultsNormalizerBase:
         rg.label = getattr(rg_section, 'name', None) or 'radius_of_gyration'
         return rg
 
+    def _map_v2_permittivity_spectra(self, permittivity_section) -> list[Spectra]:
+        frequencies = getattr(
+            getattr(permittivity_section, 'frequencies', None), 'points', None
+        )
+        value = getattr(permittivity_section, 'value', None)
+        if frequencies is None or not valid_array(frequencies) or value is None:
+            return []
+        try:
+            values_array = (
+                np.array(value.magnitude)
+                if hasattr(value, 'magnitude')
+                else np.array(value)
+            )
+        except Exception:
+            return []
+        if values_array.ndim < 3 or values_array.shape[-2:] != (3, 3):
+            return []
+        diagonal_imag = np.imag(values_array[..., [0, 1, 2], [0, 1, 2]])
+        if diagonal_imag.ndim < 2:
+            return []
+        intensities = np.mean(diagonal_imag, axis=-1)
+        if not valid_array(intensities):
+            return []
+
+        spectra = Spectra()
+        spectra.type = config.services.unavailable_value
+        spectra.label = 'computation'
+        spectra.n_energies = len(frequencies)
+        spectra.energies = frequencies
+        spectra.intensities = np.array(intensities, dtype=float)
+        spectra.intensities_units = 'F/m'
+        return [spectra]
+
     @staticmethod
     def _array_and_units(value, default_units: str = '') -> tuple[np.ndarray, str]:
         if hasattr(value, 'magnitude'):
@@ -734,7 +767,6 @@ class ResultsNormalizerBase:
                 'fermi_surfaces',
                 'hopping_matrices',
                 'kinetic_energies',
-                'permittivities',
             ],
             'magnetic': [],
             'vibrational': [],
@@ -839,6 +871,10 @@ class ResultsNormalizerBase:
                 mapped_spectrum = self._map_v2_spectrum(xas, 'XAS')
                 if mapped_spectrum:
                     spectra_sections.append(mapped_spectrum)
+            for permittivity in getattr(output, 'permittivities', []) or []:
+                spectra_sections.extend(
+                    self._map_v2_permittivity_spectra(permittivity)
+                )
 
             for rg in getattr(output, 'radii_of_gyration', []) or []:
                 mapped_rg = self._map_v2_radius_of_gyration(rg)
