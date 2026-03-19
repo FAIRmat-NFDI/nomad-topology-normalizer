@@ -719,39 +719,6 @@ class ResultsNormalizerBase:
         rg.label = getattr(rg_section, 'name', None) or 'radius_of_gyration'
         return rg
 
-    def _map_v2_permittivity_spectra(self, permittivity_section) -> list[Spectra]:
-        frequencies = getattr(
-            getattr(permittivity_section, 'frequencies', None), 'points', None
-        )
-        value = getattr(permittivity_section, 'value', None)
-        if frequencies is None or not valid_array(frequencies) or value is None:
-            return []
-        try:
-            values_array = (
-                np.array(value.magnitude)
-                if hasattr(value, 'magnitude')
-                else np.array(value)
-            )
-        except Exception:
-            return []
-        if values_array.ndim < 3 or values_array.shape[-2:] != (3, 3):
-            return []
-        diagonal_imag = np.imag(values_array[..., [0, 1, 2], [0, 1, 2]])
-        if diagonal_imag.ndim < 2:
-            return []
-        intensities = np.mean(diagonal_imag, axis=-1)
-        if not valid_array(intensities):
-            return []
-
-        spectra = Spectra()
-        spectra.type = config.services.unavailable_value
-        spectra.label = 'computation'
-        spectra.n_energies = len(frequencies)
-        spectra.energies = frequencies
-        spectra.intensities = np.array(intensities, dtype=float)
-        spectra.intensities_units = 'F/m'
-        return [spectra]
-
     @staticmethod
     def _array_and_units(value, default_units: str = '') -> tuple[np.ndarray, str]:
         if hasattr(value, 'magnitude'):
@@ -766,6 +733,8 @@ class ResultsNormalizerBase:
                 'electronic_eigenvalues',
                 'fermi_surfaces',
                 'hopping_matrices',
+                'kinetic_energies',
+                'permittivities',
             ],
             'magnetic': [],
             'vibrational': [],
@@ -808,7 +777,6 @@ class ResultsNormalizerBase:
         potential_energy_time: list[float] = []
 
         for index, output in enumerate(outputs):
-            has_explicit_band_gap = False
             for bg in getattr(output, 'electronic_band_gaps', []) or []:
                 if getattr(bg, 'value', None) is None:
                     continue
@@ -816,23 +784,6 @@ class ResultsNormalizerBase:
                 bg_result.value = bg.value
                 bg_result.type = getattr(bg, 'type', None)
                 band_gaps.append(bg_result)
-                has_explicit_band_gap = True
-
-            if not has_explicit_band_gap:
-                for eigenvalues in getattr(output, 'electronic_eigenvalues', []) or []:
-                    highest_occupied = getattr(eigenvalues, 'highest_occupied', None)
-                    lowest_unoccupied = getattr(eigenvalues, 'lowest_unoccupied', None)
-                    if highest_occupied is None or lowest_unoccupied is None:
-                        continue
-                    try:
-                        value = lowest_unoccupied - highest_occupied
-                    except Exception:
-                        continue
-                    bg_result = BandGap()
-                    bg_result.value = value
-                    bg_result.type = 'direct'
-                    band_gaps.append(bg_result)
-                    break
 
             dos_data_sections: list[DOSNew] = []
             has_projected = False
@@ -870,10 +821,6 @@ class ResultsNormalizerBase:
                 mapped_spectrum = self._map_v2_spectrum(xas, 'XAS')
                 if mapped_spectrum:
                     spectra_sections.append(mapped_spectrum)
-            for permittivity in getattr(output, 'permittivities', []) or []:
-                spectra_sections.extend(
-                    self._map_v2_permittivity_spectra(permittivity)
-                )
 
             for rg in getattr(output, 'radii_of_gyration', []) or []:
                 mapped_rg = self._map_v2_radius_of_gyration(rg)
@@ -891,24 +838,15 @@ class ResultsNormalizerBase:
 
             potential_energies = getattr(output, 'potential_energies', []) or []
             total_energies = getattr(output, 'total_energies', []) or []
-            kinetic_energies = getattr(output, 'kinetic_energies', []) or []
             energy_source = (
                 potential_energies[0]
                 if potential_energies
-                else (
-                    total_energies[0]
-                    if total_energies
-                    else kinetic_energies[0] if kinetic_energies else None
-                )
+                else total_energies[0] if total_energies else None
             )
             if (
                 energy_source is not None
                 and getattr(energy_source, 'value', None) is not None
             ):
-                if not potential_energies and not total_energies and kinetic_energies:
-                    self.logger.info(
-                        'using kinetic energy as trajectory energy fallback',
-                    )
                 potential_energy_series.append(float(energy_source.value.magnitude))
                 potential_energy_time.append(float(point_time))
 
