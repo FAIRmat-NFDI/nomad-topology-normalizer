@@ -32,6 +32,12 @@ from nomad_topology_normalizer.normalizers.common import (
     material_id_2d,
     material_id_bulk,
 )
+from nomad_topology_normalizer.normalizers.symmetry_adapter import (
+    apply_symmetry_data_to_results_symmetry,
+    from_legacy_repr_symmetry,
+    from_model_system,
+    is_symmetry_data_minimally_complete,
+)
 
 
 class MaterialNormalizer:
@@ -58,6 +64,17 @@ class MaterialNormalizer:
         self.repr_symmetry = repr_symmetry
         self.structural_type = None
         self.logger = logger
+
+    @staticmethod
+    def _merge_missing_symmetry_data(
+        primary: dict[str, object], fallback: dict[str, object]
+    ) -> dict[str, object]:
+        """Merge fallback values only into fields missing from primary."""
+        merged = dict(primary)
+        for key, value in fallback.items():
+            if merged.get(key) is None and value is not None:
+                merged[key] = value
+        return merged
 
     def material(self, populate_topology: bool = True) -> Material:
         """Returns a populated Material subsection."""
@@ -383,14 +400,17 @@ class MaterialNormalizer:
         result = Symmetry()
         filled = False
 
-        if self.repr_symmetry:
-            result.hall_number = self.repr_symmetry.hall_number
-            result.hall_symbol = self.repr_symmetry.hall_symbol
-            result.bravais_lattice = self.repr_symmetry.bravais_lattice
-            result.crystal_system = self.repr_symmetry.crystal_system
-            result.space_group_number = self.repr_symmetry.space_group_number
-            result.space_group_symbol = self.repr_symmetry.international_short_symbol
-            result.point_group = self.repr_symmetry.point_group
+        # Prefer symmetry directly provided by v2 ModelSystem. If core
+        # identifiers are incomplete, fill missing values from legacy
+        # representative symmetry (typically MatID-backed in migrated flows).
+        symmetry_data = from_model_system(self.repr_system)
+        if not is_symmetry_data_minimally_complete(symmetry_data):
+            symmetry_data = self._merge_missing_symmetry_data(
+                symmetry_data, from_legacy_repr_symmetry(self.repr_symmetry)
+            )
+
+        apply_symmetry_data_to_results_symmetry(result, symmetry_data)
+        if any(value is not None for value in symmetry_data.values()):
             filled = True
 
         # Fill in prototype information. SystemNormalizer has cached many of

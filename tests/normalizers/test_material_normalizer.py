@@ -1,5 +1,7 @@
 """Tests for MaterialNormalizer v2 functionality."""
 
+from types import SimpleNamespace
+
 import numpy as np
 import pytest
 from nomad.datamodel import EntryArchive, EntryMetadata
@@ -9,6 +11,8 @@ from nomad.utils import get_logger
 from nomad_simulations.schema_packages.atoms_state import AtomsState
 from nomad_simulations.schema_packages.general import Simulation
 from nomad_simulations.schema_packages.model_system import ModelSystem
+
+from nomad_topology_normalizer.normalizers.material import MaterialNormalizer
 
 LOGGER = get_logger(__name__)
 
@@ -223,6 +227,76 @@ class TestMaterialNormalizer:
         assert system.chemical_formula is None or not hasattr(
             system, 'chemical_formula'
         )
+
+    def test_symmetry_prefers_model_system_over_legacy(self):
+        """v2 ModelSystem symmetry should take precedence over legacy values."""
+        archive = EntryArchive(metadata=EntryMetadata())
+        repr_system = SimpleNamespace(
+            symmetry=SimpleNamespace(
+                hall_number=523,
+                hall_symbol='-F 4 2 3',
+                bravais_lattice='cF',
+                crystal_system='cubic',
+                space_group_number=225,
+                space_group_symbol='Fm-3m',
+                point_group_symbol='m-3m',
+            ),
+            local_symmetry=None,
+            prototype=None,
+        )
+        repr_symmetry = SimpleNamespace(
+            hall_number=529,
+            hall_symbol='-I 4 2 3',
+            bravais_lattice='cI',
+            crystal_system='cubic',
+            space_group_number=229,
+            international_short_symbol='Im-3m',
+            point_group='m-3m',
+        )
+        normalizer = MaterialNormalizer(
+            archive, repr_system, repr_symmetry, None, None, None, None, None, LOGGER
+        )
+
+        symmetry = normalizer.symmetry()
+
+        assert symmetry.space_group_number == 225
+        assert symmetry.space_group_symbol == 'Fm-3m'
+        assert symmetry.hall_number == 523
+
+    def test_symmetry_falls_back_to_legacy_when_v2_incomplete(self):
+        """Legacy repr_symmetry should fill missing core v2 symmetry data."""
+        archive = EntryArchive(metadata=EntryMetadata())
+        repr_system = SimpleNamespace(
+            symmetry=SimpleNamespace(
+                hall_number=523,
+                hall_symbol='-F 4 2 3',
+                bravais_lattice='cF',
+                crystal_system='cubic',
+                space_group_number=225,
+                space_group_symbol='Fm-3m',
+                point_group_symbol=None,
+            ),
+            local_symmetry=None,
+            prototype=None,
+        )
+        repr_symmetry = SimpleNamespace(
+            hall_number=529,
+            hall_symbol='-I 4 2 3',
+            bravais_lattice='cI',
+            crystal_system='cubic',
+            space_group_number=229,
+            international_short_symbol='Im-3m',
+            point_group='m-3m',
+        )
+        normalizer = MaterialNormalizer(
+            archive, repr_system, repr_symmetry, None, None, None, None, None, LOGGER
+        )
+
+        symmetry = normalizer.symmetry()
+
+        assert symmetry.space_group_number == 225
+        assert symmetry.space_group_symbol == 'Fm-3m'
+        assert symmetry.point_group == 'm-3m'
 
 
 if __name__ == '__main__':
