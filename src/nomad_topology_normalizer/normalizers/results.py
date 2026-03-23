@@ -431,8 +431,8 @@ class ResultsNormalizerBase:
                     available_methods=method_tokens,
                 )
 
-    def _map_v2_dos_data(self, dos_section) -> tuple[DOSNew, bool] | None:
-        """Map one v2 ElectronicDensityOfStates section into results DOSNew."""
+    def _map_dos_data(self, dos_section) -> tuple[DOSNew, bool] | None:
+        """Map one ElectronicDensityOfStates section into results DOSNew."""
         energies_points = getattr(
             getattr(dos_section, 'energies', None), 'points', None
         )
@@ -468,10 +468,10 @@ class ResultsNormalizerBase:
         has_projected = bool(getattr(dos_section, 'projected_dos', None))
         return dos_data, has_projected
 
-    def _map_v2_band_structure(
+    def _map_band_structure(
         self, band_structure_section
     ) -> BandStructureElectronic | None:
-        """Map one v2 ElectronicBandStructure into results BandStructureElectronic."""
+        """Map one ElectronicBandStructure into results BandStructureElectronic."""
         values = getattr(band_structure_section, 'value', None)
         if values is None:
             return None
@@ -520,17 +520,17 @@ class ResultsNormalizerBase:
         band_structure.spin_polarized = energies_array.shape[0] == 2
         return band_structure
 
-    def _map_v2_greens_functions(
+    def _map_greens_functions(
         self, output_section
     ) -> GreensFunctionsElectronic | None:
-        """Map v2 Green's function outputs into GreensFunctionsElectronic."""
+        """Map Green's function outputs into GreensFunctionsElectronic."""
 
         def _to_array_quantity(value):
             try:
                 array = np.array(value.magnitude)
             except Exception:
                 return value
-            # TODO(v2->results): Legacy Greens fields have inconsistent/different
+            # TODO(results-compat): Legacy Greens fields have inconsistent/different
             # shape+dtype expectations vs nomad-simulations complex payloads.
             # Keep axis/metadata transfer for now and skip complex payload values.
             if np.iscomplexobj(array):
@@ -766,7 +766,7 @@ class ResultsNormalizerBase:
             greens_functions.chemical_potential = legacy_gf
         return greens_functions
 
-    def _map_v2_spectrum(self, spectrum_section, spectrum_type: str) -> Spectra | None:
+    def _map_spectrum(self, spectrum_section, spectrum_type: str) -> Spectra | None:
         energies = getattr(getattr(spectrum_section, 'energies', None), 'points', None)
         intensities = getattr(spectrum_section, 'value', None)
         if intensities is None:
@@ -788,7 +788,7 @@ class ResultsNormalizerBase:
         spectra.intensities_units = intensities_units
         return spectra
 
-    def _map_v2_radius_of_gyration(self, rg_section) -> RadiusOfGyration | None:
+    def _map_radius_of_gyration(self, rg_section) -> RadiusOfGyration | None:
         value = getattr(rg_section, 'value', None)
         if value is None:
             return None
@@ -866,7 +866,7 @@ class ResultsNormalizerBase:
             dos_data_sections: list[DOSNew] = []
             has_projected = False
             for dos in getattr(output, 'electronic_dos', []) or []:
-                mapped = self._map_v2_dos_data(dos)
+                mapped = self._map_dos_data(dos)
                 if mapped is None:
                     continue
                 dos_data, projected = mapped
@@ -883,25 +883,25 @@ class ResultsNormalizerBase:
             for band_structure in (
                 getattr(output, 'electronic_band_structures', []) or []
             ):
-                mapped_band_structure = self._map_v2_band_structure(band_structure)
+                mapped_band_structure = self._map_band_structure(band_structure)
                 if mapped_band_structure:
                     band_structures.append(mapped_band_structure)
 
-            mapped_greens_functions = self._map_v2_greens_functions(output)
+            mapped_greens_functions = self._map_greens_functions(output)
             if mapped_greens_functions:
                 greens_functions.append(mapped_greens_functions)
 
             for absorption in getattr(output, 'absorption_spectra', []) or []:
-                mapped_spectrum = self._map_v2_spectrum(absorption, 'unavailable')
+                mapped_spectrum = self._map_spectrum(absorption, 'unavailable')
                 if mapped_spectrum:
                     spectra_sections.append(mapped_spectrum)
             for xas in getattr(output, 'xas_spectra', []) or []:
-                mapped_spectrum = self._map_v2_spectrum(xas, 'XAS')
+                mapped_spectrum = self._map_spectrum(xas, 'XAS')
                 if mapped_spectrum:
                     spectra_sections.append(mapped_spectrum)
 
             for rg in getattr(output, 'radii_of_gyration', []) or []:
-                mapped_rg = self._map_v2_radius_of_gyration(rg)
+                mapped_rg = self._map_radius_of_gyration(rg)
                 if mapped_rg:
                     rg_sections.append(mapped_rg)
 
