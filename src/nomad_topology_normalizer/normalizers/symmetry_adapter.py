@@ -2,6 +2,10 @@ from __future__ import annotations
 
 from typing import Any
 
+# TODO(migration): Keep adapter local to topology-normalizer during v2 migration.
+# TODO(migration): Re-evaluate elevation only after nomad-simulations/nomad-FAIR
+# symmetry field stability is confirmed and cross-plugin parity fixtures exist.
+
 
 def empty_symmetry_data() -> dict[str, Any]:
     """Create an empty legacy-equivalent symmetry data dictionary."""
