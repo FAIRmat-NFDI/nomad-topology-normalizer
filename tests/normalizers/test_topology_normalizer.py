@@ -1,18 +1,33 @@
 # from nomad.normalizing.topology import TopologyNormalizer
+from types import SimpleNamespace
+
 import numpy as np
 from nomad.client import normalize_all
 from nomad.datamodel import EntryArchive, EntryMetadata
 from nomad.datamodel.metainfo.workflow import Workflow
-from nomad.datamodel.results import Material, Results
+from nomad.datamodel.results import Material, Relation, Results, System
 from nomad.units import ureg
 from nomad.utils import get_logger
 from nomad_simulations.schema_packages.atoms_state import AtomsState
 from nomad_simulations.schema_packages.general import Simulation
 from nomad_simulations.schema_packages.model_system import ModelSystem
 
-from nomad_topology_normalizer.normalizers.topology import TopologyNormalizer
+from nomad_topology_normalizer.normalizers.topology import (
+    TopologyNormalizer,
+    add_system,
+)
 
 LOGGER = get_logger(__name__)
+
+
+def _make_bulk_model_system() -> ModelSystem:
+    system = ModelSystem(is_representative=True, type='bulk')
+    system.positions = np.array([[0.0, 0.0, 0.0], [1.35, 1.35, 1.35]]) * ureg.angstrom
+    system.lattice_vectors = np.eye(3) * 5.43 * ureg.angstrom
+    system.periodic_boundary_conditions = [True, True, True]
+    system.particle_states.append(AtomsState(chemical_symbol='Si', atomic_number=14))
+    system.particle_states.append(AtomsState(chemical_symbol='Si', atomic_number=14))
+    return system
 
 
 def test_topology_calculation():
@@ -567,3 +582,103 @@ def test_normalizer():
     )
     normalize_all(entry_archive)
     assert entry_archive.workflow2.name == 'test'
+
+
+def test_topology_bulk_prefers_v2_symmetry_no_matid_recompute(monkeypatch):
+    normalizer = TopologyNormalizer()
+    normalizer.logger = LOGGER
+    normalizer.masses = None
+    normalizer.conv_atoms = _make_bulk_model_system().to_ase_atoms()
+    normalizer.repr_system = _make_bulk_model_system()
+    normalizer.repr_system.type = 'bulk'
+    normalizer.repr_system.symmetry = SimpleNamespace(
+        hall_number=523,
+        hall_symbol='-F 4 2 3',
+        bravais_lattice='cF',
+        crystal_system='cubic',
+        space_group_number=225,
+        space_group_symbol='Fm-3m',
+        point_group_symbol='m-3m',
+    )
+    normalizer.repr_system.local_symmetry = None
+    normalizer.repr_symmetry = SimpleNamespace(
+        m_cache={
+            'symmetry_analyzer': SimpleNamespace(
+                get_space_group_number=lambda: 229,
+                get_wyckoff_sets_conventional=lambda: [],
+            )
+        }
+    )
+
+    def fail_create_symmetry(_):
+        raise AssertionError('MatID symmetry recomputation should not be used')
+
+    monkeypatch.setattr(normalizer, '_create_symmetry', fail_create_symmetry)
+
+    topology = {}
+    original = System(
+        label='original',
+        system_relation=Relation(type='root'),
+        n_atoms=len(normalizer.repr_system.particle_states),
+    )
+    add_system(original, topology)
+    material = Material(material_id='v2-material-id')
+
+    normalizer._topology_bulk(original, topology, material)
+
+    conv_system = next(
+        item for item in topology.values() if item.label == 'conventional cell'
+    )
+    assert conv_system.symmetry.space_group_number == 225
+    assert conv_system.symmetry.space_group_symbol == 'Fm-3m'
+    assert conv_system.material_id == 'v2-material-id'
+
+
+def test_topology_bulk_uses_matid_for_material_id_fallback(monkeypatch):
+    normalizer = TopologyNormalizer()
+    normalizer.logger = LOGGER
+    normalizer.masses = None
+    normalizer.conv_atoms = _make_bulk_model_system().to_ase_atoms()
+    normalizer.repr_system = _make_bulk_model_system()
+    normalizer.repr_system.type = 'bulk'
+    normalizer.repr_system.symmetry = SimpleNamespace(
+        hall_number=523,
+        hall_symbol='-F 4 2 3',
+        bravais_lattice='cF',
+        crystal_system='cubic',
+        space_group_number=225,
+        space_group_symbol='Fm-3m',
+        point_group_symbol=None,
+    )
+    normalizer.repr_system.local_symmetry = None
+
+    analyzer = SimpleNamespace(
+        get_space_group_number=lambda: 229,
+        get_wyckoff_sets_conventional=lambda: [],
+    )
+    normalizer.repr_symmetry = SimpleNamespace(
+        point_group='m-3m',
+        m_cache={'symmetry_analyzer': analyzer},
+    )
+    called = {'value': False}
+
+    def create_symmetry(_):
+        called['value'] = True
+
+    monkeypatch.setattr(normalizer, '_create_symmetry', create_symmetry)
+
+    topology = {}
+    original = System(
+        label='original',
+        system_relation=Relation(type='root'),
+        n_atoms=len(normalizer.repr_system.particle_states),
+    )
+    add_system(original, topology)
+
+    normalizer._topology_bulk(original, topology, Material())
+
+    assert called['value'] is False
+    conv_system = next(
+        item for item in topology.values() if item.label == 'conventional cell'
+    )
+    assert conv_system.material_id is not None

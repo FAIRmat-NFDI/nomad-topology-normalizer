@@ -63,6 +63,12 @@ from structlog.stdlib import BoundLogger
 
 from nomad_topology_normalizer.normalizers.material import MaterialNormalizer
 from nomad_topology_normalizer.normalizers.normalizer import Normalizer
+from nomad_topology_normalizer.normalizers.symmetry_adapter import (
+    apply_symmetry_data_to_results_symmetry,
+    from_legacy_repr_symmetry,
+    from_model_system,
+    is_symmetry_data_minimally_complete,
+)
 
 conventional_description: str = (
     'The conventional cell of the material from which the '
@@ -304,6 +310,32 @@ class TopologyNormalizer(Normalizer):
     Inherits from both local Normalizer (for helper methods) and
     nomad.normalizing.Normalizer (for plugin compatibility).
     """
+
+    @staticmethod
+    def _merge_missing_symmetry_data(
+        primary: dict[str, object], fallback: dict[str, object]
+    ) -> dict[str, object]:
+        merged = dict(primary)
+        for key, value in fallback.items():
+            if merged.get(key) is None and value is not None:
+                merged[key] = value
+        return merged
+
+    def _resolved_symmetry_data(self) -> dict[str, object]:
+        symmetry_data = from_model_system(self.repr_system)
+        if not is_symmetry_data_minimally_complete(symmetry_data):
+            symmetry_data = self._merge_missing_symmetry_data(
+                symmetry_data, from_legacy_repr_symmetry(self.repr_symmetry)
+            )
+        return symmetry_data
+
+    @staticmethod
+    def _symmetry_from_data(symmetry_data: dict[str, object]) -> Symmetry | None:
+        if not any(value is not None for value in symmetry_data.values()):
+            return None
+        result = Symmetry()
+        apply_symmetry_data_to_results_symmetry(result, symmetry_data)
+        return result
 
     def _initialize_representative_system(
         self, archive: 'EntryArchive', system_v2=None
@@ -560,7 +592,7 @@ class TopologyNormalizer(Normalizer):
         n_atoms = len(atoms)
         cell = atoms.get_cell()
         if material.structural_type == 'bulk':
-            self._topology_bulk(original, topology)
+            self._topology_bulk(original, topology, material)
         elif material.structural_type == '1D':
             self._topology_1d(original, topology)
         # Continue creating topology if system size is not too large
@@ -675,7 +707,9 @@ class TopologyNormalizer(Normalizer):
 
         return list(topology.values())
 
-    def _topology_bulk(self, original, topology) -> None:
+    def _topology_bulk(
+        self, original, topology, material: Material | None = None
+    ) -> None:
         """Creates a topology for bulk structures as detected by the old matid
         classification."""
         if self.conv_atoms is None:
@@ -704,15 +738,25 @@ class TopologyNormalizer(Normalizer):
             description=conventional_description,
         )
         conv_system.atoms = nomad_atoms_from_ase_atoms(self.conv_atoms)
-        symmetry_analyzer = self.repr_symmetry.m_cache.get('symmetry_analyzer')
-        conv_system.symmetry = self._create_symmetry(symmetry_analyzer)
+        symmetry_analyzer = None
+        m_cache = getattr(self.repr_symmetry, 'm_cache', None)
+        if m_cache is not None and hasattr(m_cache, 'get'):
+            symmetry_analyzer = m_cache.get('symmetry_analyzer')
+
+        symmetry_data = self._resolved_symmetry_data()
+        conv_system.symmetry = self._symmetry_from_data(symmetry_data)
+        if conv_system.symmetry is None and symmetry_analyzer is not None:
+            conv_system.symmetry = self._create_symmetry(symmetry_analyzer)
         conv_system.cell = cell_from_ase_atoms(
             self.conv_atoms, masses=self.masses, atom_labels=None
         )
-        conv_system.material_id = material_id_bulk(
-            symmetry_analyzer.get_space_group_number(),
-            symmetry_analyzer.get_wyckoff_sets_conventional(),
-        )
+        if material is not None and material.material_id:
+            conv_system.material_id = material.material_id
+        elif symmetry_analyzer is not None:
+            conv_system.material_id = material_id_bulk(
+                symmetry_analyzer.get_space_group_number(),
+                symmetry_analyzer.get_wyckoff_sets_conventional(),
+            )
         add_system(conv_system, topology, subsystem)
         add_system_info_2(conv_system, topology, parent_system=self.repr_system)
 
