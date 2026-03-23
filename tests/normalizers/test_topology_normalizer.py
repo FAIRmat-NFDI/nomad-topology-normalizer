@@ -682,3 +682,76 @@ def test_topology_bulk_uses_matid_for_material_id_fallback(monkeypatch):
         item for item in topology.values() if item.label == 'conventional cell'
     )
     assert conv_system.material_id is not None
+
+
+def test_topology_skips_matid_for_bulk_with_complete_v2_symmetry(monkeypatch):
+    archive = EntryArchive(metadata=EntryMetadata())
+    archive.results = Results(material=Material(structural_type='bulk'))
+    system = _make_bulk_model_system()
+    system.symmetry = SimpleNamespace(
+        hall_number=523,
+        hall_symbol='-F 4 2 3',
+        bravais_lattice='cF',
+        crystal_system='cubic',
+        space_group_number=225,
+        space_group_symbol='Fm-3m',
+        point_group_symbol='m-3m',
+    )
+    simulation = Simulation()
+    simulation.model_system.append(system)
+    archive.data = simulation
+
+    normalizer = TopologyNormalizer()
+    normalizer.entry_archive = archive
+    normalizer.repr_system = system
+    normalizer.logger = LOGGER
+
+    monkeypatch.setattr(normalizer, 'topology_calculation', lambda: None)
+
+    def fail_matid(_):
+        raise AssertionError('topology_matid should be skipped for complete v2 bulk')
+
+    monkeypatch.setattr(normalizer, 'topology_matid', fail_matid)
+    monkeypatch.setattr(normalizer, 'topology_data', lambda *_: ['topology-data'])
+
+    result = normalizer.topology(archive.results.material, system_v2=system)
+
+    assert result == ['topology-data']
+
+
+def test_topology_runs_matid_for_bulk_with_incomplete_v2_symmetry(monkeypatch):
+    archive = EntryArchive(metadata=EntryMetadata())
+    archive.results = Results(material=Material(structural_type='bulk'))
+    system = _make_bulk_model_system()
+    system.symmetry = SimpleNamespace(
+        hall_number=523,
+        hall_symbol='-F 4 2 3',
+        bravais_lattice='cF',
+        crystal_system='cubic',
+        space_group_number=225,
+        space_group_symbol='Fm-3m',
+        point_group_symbol=None,
+    )
+    simulation = Simulation()
+    simulation.model_system.append(system)
+    archive.data = simulation
+
+    normalizer = TopologyNormalizer()
+    normalizer.entry_archive = archive
+    normalizer.repr_system = system
+    normalizer.logger = LOGGER
+
+    called = {'value': False}
+    monkeypatch.setattr(normalizer, 'topology_calculation', lambda: None)
+
+    def run_matid(_):
+        called['value'] = True
+        return ['topology-matid']
+
+    monkeypatch.setattr(normalizer, 'topology_matid', run_matid)
+    monkeypatch.setattr(normalizer, 'topology_data', lambda *_: ['topology-data'])
+
+    result = normalizer.topology(archive.results.material, system_v2=system)
+
+    assert called['value'] is True
+    assert result == ['topology-matid']

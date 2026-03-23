@@ -329,6 +329,10 @@ class TopologyNormalizer(Normalizer):
             )
         return symmetry_data
 
+    def _has_complete_model_system_symmetry(self) -> bool:
+        """True when v2 ModelSystem symmetry is complete without legacy fallback."""
+        return is_symmetry_data_minimally_complete(from_model_system(self.repr_system))
+
     @staticmethod
     def _symmetry_from_data(symmetry_data: dict[str, object]) -> Symmetry | None:
         if not any(value is not None for value in symmetry_data.values()):
@@ -412,7 +416,12 @@ class TopologyNormalizer(Normalizer):
         topology = self.topology_calculation()
 
         # Second: create topology with MatID
-        if topology is None:
+        skip_matid_bulk = bool(
+            material
+            and material.structural_type == 'bulk'
+            and self._has_complete_model_system_symmetry()
+        )
+        if topology is None and not skip_matid_bulk:
             with utils.timer(self.logger, 'calculating topology with matid'):
                 topology = self.topology_matid(material)
 
