@@ -287,6 +287,7 @@ class ResultsNormalizerBase:
 
     def _normalize_method_with_data_schema(self, archive: EntryArchive) -> None:
         """Populate results.method from v2 Simulation data when available."""
+
         def _enum_values(section_cls, quantity_name: str) -> set[str]:
             return set(section_cls.m_def.all_quantities[quantity_name].type)
 
@@ -296,6 +297,23 @@ class ResultsNormalizerBase:
             valid_values = _enum_values(type(target), quantity_name)
             if value in valid_values:
                 setattr(target, quantity_name, value)
+
+        def _map_dft_fields(model_method, simulation_method: DFT) -> None:
+            # Keep legacy-equivalent transfer only.
+            is_spin_polarized = getattr(model_method, 'is_spin_polarized', None)
+            if is_spin_polarized is not None:
+                simulation_method.spin_polarized = bool(is_spin_polarized)
+
+            jacobs_ladder = getattr(model_method, 'jacobs_ladder', None)
+            if jacobs_ladder in _enum_values(DFT, 'jacobs_ladder'):
+                simulation_method.jacobs_ladder = jacobs_ladder
+                simulation_method.xc_functional_type = jacobs_ladder
+            elif jacobs_ladder == 'hybrid-GGA':
+                simulation_method.jacobs_ladder = 'hybrid'
+                simulation_method.xc_functional_type = 'hybrid'
+            elif jacobs_ladder == 'hybrid-meta-GGA':
+                simulation_method.jacobs_ladder = 'hyper-GGA'
+                simulation_method.xc_functional_type = 'hyper-GGA'
 
         data = getattr(archive, 'data', None)
         model_methods = getattr(data, 'model_method', None) if data else None
@@ -350,6 +368,9 @@ class ResultsNormalizerBase:
 
             if method_type == 'DFT' and simulation.dft is None:
                 simulation.dft = DFT()
+                _map_dft_fields(model_method, simulation.dft)
+            elif method_type == 'DFT':
+                _map_dft_fields(model_method, simulation.dft)
             elif method_type == 'TB':
                 if simulation.tb is None:
                     simulation.tb = TB()
@@ -396,8 +417,19 @@ class ResultsNormalizerBase:
                     )
 
         if method_tokens:
-            unique_tokens = list(dict.fromkeys(method_tokens))
-            method.method_name = unique_tokens[-1]
+            # NOTE(migration): results.method.method_name is currently a single
+            # enum value in nomad-FAIR results schema. For v2 multi-method
+            # inputs, we intentionally use the first supported model_method as
+            # the canonical method_name for backward-compatible search behavior.
+            # The full multi-method design is deferred to results/search redesign.
+            method.method_name = method_tokens[0]
+            if len(method_tokens) > 1:
+                self.logger.warning(
+                    'multiple v2 model_method sections present; using first '
+                    'supported method_name for results compatibility',
+                    chosen_method=method_tokens[0],
+                    available_methods=method_tokens,
+                )
 
     def _map_v2_dos_data(self, dos_section) -> tuple[DOSNew, bool] | None:
         """Map one v2 ElectronicDensityOfStates section into results DOSNew."""

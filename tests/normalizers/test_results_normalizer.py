@@ -293,7 +293,7 @@ def test_data_schema_populates_method_from_simulation():
     normalizer.normalize(archive, LOGGER)
 
     assert archive.results.method is not None
-    assert archive.results.method.method_name == 'TB'
+    assert archive.results.method.method_name == 'DFT'
     assert archive.results.method.simulation is not None
     assert archive.results.method.simulation.program_name == 'VASP'
     assert archive.results.method.simulation.program_version == '6.4.2'
@@ -386,7 +386,7 @@ def test_data_schema_maps_method_details_for_gw_bse_dmft():
 
     method = archive.results.method
     assert method is not None
-    assert method.method_name == 'DMFT'
+    assert method.method_name == 'GW'
     assert method.simulation is not None
     assert method.simulation.gw is not None
     assert method.simulation.gw.type == 'G0W0'
@@ -397,6 +397,88 @@ def test_data_schema_maps_method_details_for_gw_bse_dmft():
     assert method.simulation.dmft.impurity_solver_type == 'CT-HYB'
     assert method.simulation.dmft.magnetic_state == 'paramagnetic'
     assert method.simulation.dmft.inverse_temperature is not None
+
+
+def test_data_schema_method_name_uses_first_supported_model_method():
+    """Method name should use first supported model_method for compatibility."""
+    archive = EntryArchive(metadata=EntryMetadata())
+    archive.results = Results()
+    archive.results.properties = Properties()
+
+    simulation = Simulation()
+    simulation.program = Program(name='VASP')
+    # Intentionally place DMFT first and DFT last.
+    simulation.model_method.append(
+        DMFT(
+            impurity_solver='CT-HYB',
+            magnetic_state='paramagnetic',
+        )
+    )
+    simulation.model_method.append(GW(type='G0W0'))
+    simulation.model_method.append(DFT())
+
+    model_system = ModelSystem(
+        name='test_system',
+        type='bulk',
+        is_representative=True,
+        positions=np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]]) * ureg.angstrom,
+        n_particles=2,
+    )
+    model_system.particle_states.append(
+        AtomsState(chemical_symbol='Si', atomic_number=14)
+    )
+    model_system.particle_states.append(
+        AtomsState(chemical_symbol='Si', atomic_number=14)
+    )
+    model_system.lattice_vectors = np.eye(3) * 5.43 * ureg.angstrom
+    model_system.periodic_boundary_conditions = [True, True, True]
+    simulation.model_system.append(model_system)
+    archive.data = simulation
+
+    normalizer = ResultsNormalizer()
+    normalizer.normalize(archive, LOGGER)
+
+    assert archive.results.method is not None
+    assert archive.results.method.method_name == 'DMFT'
+
+
+def test_data_schema_maps_dft_spin_and_jacobs_ladder():
+    """v2 DFT metadata should map to legacy-equivalent DFT result fields."""
+    archive = EntryArchive(metadata=EntryMetadata())
+    archive.results = Results()
+    archive.results.properties = Properties()
+
+    simulation = Simulation()
+    simulation.program = Program(name='VASP')
+    simulation.model_method.append(DFT(is_spin_polarized=True, jacobs_ladder='GGA'))
+
+    model_system = ModelSystem(
+        name='test_system',
+        type='bulk',
+        is_representative=True,
+        positions=np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]]) * ureg.angstrom,
+        n_particles=2,
+    )
+    model_system.particle_states.append(
+        AtomsState(chemical_symbol='Si', atomic_number=14)
+    )
+    model_system.particle_states.append(
+        AtomsState(chemical_symbol='Si', atomic_number=14)
+    )
+    model_system.lattice_vectors = np.eye(3) * 5.43 * ureg.angstrom
+    model_system.periodic_boundary_conditions = [True, True, True]
+    simulation.model_system.append(model_system)
+    archive.data = simulation
+
+    normalizer = ResultsNormalizer()
+    normalizer.normalize(archive, LOGGER)
+
+    assert archive.results.method is not None
+    assert archive.results.method.simulation is not None
+    assert archive.results.method.simulation.dft is not None
+    assert archive.results.method.simulation.dft.spin_polarized is True
+    assert archive.results.method.simulation.dft.jacobs_ladder == 'GGA'
+    assert archive.results.method.simulation.dft.xc_functional_type == 'GGA'
 
 
 def test_data_schema_maps_outputs_electronic_properties():
