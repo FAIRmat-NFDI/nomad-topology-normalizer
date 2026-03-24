@@ -143,6 +143,7 @@ from nomad.datamodel.results import (
     VibrationalProperties,
     VolumeDynamic,
 )
+from nomad.units import ureg
 from nomad.utils import extract_section, traverse_reversed
 
 from nomad_topology_normalizer.normalizers.common import structures_2d
@@ -298,13 +299,115 @@ class ResultsNormalizerBase:
             if value in valid_values:
                 setattr(target, quantity_name, value)
 
-        def _map_dft_fields(model_method, simulation_method: DFT) -> None:
+        def _xc_names_from_model_method(model_method) -> list[str]:
+            names = []
+            xc = getattr(model_method, 'xc', None)
+            components = getattr(xc, 'components', None) if xc else None
+            for comp in components or []:
+                label = getattr(comp, 'canonical_label', None) or getattr(
+                    comp, 'name', None
+                )
+                if label:
+                    names.append(label)
+            # de-duplicate while preserving order
+            return list(dict.fromkeys(names))
+
+        def _jacobs_from_xc_names(xc_names: list[str]) -> str | None:
+            if not xc_names:
+                return None
+            rung_order = {'lda': 0, 'gga': 1, 'mgg': 2, 'hyb_mgg': 3, 'hyb': 4}
+            rung_to_value = {
+                'lda': 'LDA',
+                'gga': 'GGA',
+                'mgg': 'meta-GGA',
+                'hyb_mgg': 'hyper-GGA',
+                'hyb': 'hybrid',
+            }
+            regex = re.compile(r'((HYB_)?[A-Z]{3})')
+            abbrevs = []
+            for name in xc_names:
+                match = regex.match(name)
+                if not match:
+                    continue
+                token = match.group(1)
+                token = token.lower() if token == 'HYB_MGG' else token[:3].lower()
+                if token in rung_order:
+                    abbrevs.append(token)
+            if not abbrevs:
+                return None
+            highest = max(abbrevs, key=lambda x: rung_order[x])
+            return rung_to_value.get(highest)
+
+        def _basis_set_type_from_model_method(model_method, program_name: str | None):
+            settings = getattr(model_method, 'numerical_settings', None) or []
+            for setting in settings:
+                setting_name = getattr(getattr(setting, 'm_def', None), 'name', None)
+                if setting_name != 'BasisSetContainer':
+                    continue
+                components = getattr(setting, 'basis_set_components', None) or []
+                component_names = [
+                    getattr(getattr(comp, 'm_def', None), 'name', '')
+                    for comp in components
+                ]
+                if any('PlaneWave' in name for name in component_names):
+                    return 'plane waves'
+                if any('APW' in name for name in component_names):
+                    return '(L)APW+lo'
+            # Legacy-equivalent fallback for common plane-wave codes.
+            if program_name and program_name.lower() in ('vasp', 'quantum espresso'):
+                return 'plane waves'
+            return None
+
+        def _core_electron_treatment_from_model_method(
+            model_method, program_name: str | None
+        ):
+            settings = getattr(model_method, 'numerical_settings', None) or []
+            for setting in settings:
+                setting_name = getattr(getattr(setting, 'm_def', None), 'name', None)
+                if setting_name == 'Pseudopotential':
+                    return 'pseudopotential'
+            if program_name and program_name.lower() in ('vasp', 'quantum espresso'):
+                return 'pseudopotential'
+            if program_name and program_name.lower() in (
+                'fhi-aims',
+                'exciting',
+                'elk',
+                'wien2k',
+            ):
+                return 'full all electron'
+            return None
+
+        def _scf_threshold_from_model_method(model_method):
+            settings = getattr(model_method, 'numerical_settings', None) or []
+            for setting in settings:
+                setting_name = getattr(getattr(setting, 'm_def', None), 'name', None)
+                if setting_name == 'SelfConsistency':
+                    threshold_change = getattr(setting, 'threshold_change', None)
+                    if threshold_change is not None:
+                        threshold_unit = getattr(setting, 'threshold_change_unit', None)
+                        if threshold_unit:
+                            try:
+                                return threshold_change * ureg(threshold_unit)
+                            except Exception:
+                                pass
+                        return threshold_change
+            return None
+
+        def _map_dft_fields(
+            model_method, simulation_method: DFT, program_name: str | None
+        ) -> None:
             # Keep legacy-equivalent transfer only.
             is_spin_polarized = getattr(model_method, 'is_spin_polarized', None)
             if is_spin_polarized is not None:
                 simulation_method.spin_polarized = bool(is_spin_polarized)
 
             jacobs_ladder = getattr(model_method, 'jacobs_ladder', None)
+            xc_names = _xc_names_from_model_method(model_method)
+            if xc_names:
+                simulation_method.xc_functional_names = xc_names
+            if jacobs_ladder is None:
+                jacobs_ladder = _jacobs_from_xc_names(xc_names)
+
             if jacobs_ladder in _enum_values(DFT, 'jacobs_ladder'):
                 simulation_method.jacobs_ladder = jacobs_ladder
                 simulation_method.xc_functional_type = jacobs_ladder
@@ -314,6 +417,42 @@ class ResultsNormalizerBase:
             elif jacobs_ladder == 'hybrid-meta-GGA':
                 simulation_method.jacobs_ladder = 'hyper-GGA'
                 simulation_method.xc_functional_type = 'hyper-GGA'
+
+            basis_set_type = _basis_set_type_from_model_method(
+                model_method, program_name
+            )
+            if basis_set_type in _enum_values(DFT, 'basis_set_type'):
+                simulation_method.basis_set_type = basis_set_type
+
+            core_treatment = _core_electron_treatment_from_model_method(
+                model_method, program_name
+            )
+            if core_treatment in _enum_values(DFT, 'core_electron_treatment'):
+                simulation_method.core_electron_treatment = core_treatment
+
+            scf_threshold = _scf_threshold_from_model_method(model_method)
+            if scf_threshold is not None:
+                simulation_method.scf_threshold_energy_change = scf_threshold
+
+            xc = getattr(model_method, 'xc', None)
+            exact_exchange = getattr(xc, 'global_exact_exchange', None) if xc else None
+            if exact_exchange is not None:
+                simulation_method.exact_exchange_mixing_factor = exact_exchange
+
+        def _map_excited_state_starting_point(
+            target_method, dft_method: DFT | None
+        ) -> None:
+            if dft_method is None:
+                return
+            dft_basis = getattr(dft_method, 'basis_set_type', None)
+            if dft_basis in _enum_values(type(target_method), 'basis_set_type'):
+                target_method.basis_set_type = dft_basis
+            dft_names = getattr(dft_method, 'xc_functional_names', None)
+            if dft_names:
+                target_method.starting_point_names = dft_names
+            dft_xc_type = getattr(dft_method, 'xc_functional_type', None)
+            if dft_xc_type in _enum_values(type(target_method), 'starting_point_type'):
+                target_method.starting_point_type = dft_xc_type
 
         data = getattr(archive, 'data', None)
         model_methods = getattr(data, 'model_method', None) if data else None
@@ -368,9 +507,9 @@ class ResultsNormalizerBase:
 
             if method_type == 'DFT' and simulation.dft is None:
                 simulation.dft = DFT()
-                _map_dft_fields(model_method, simulation.dft)
+                _map_dft_fields(model_method, simulation.dft, simulation.program_name)
             elif method_type == 'DFT':
-                _map_dft_fields(model_method, simulation.dft)
+                _map_dft_fields(model_method, simulation.dft, simulation.program_name)
             elif method_type == 'TB':
                 if simulation.tb is None:
                     simulation.tb = TB()
@@ -391,6 +530,10 @@ class ResultsNormalizerBase:
             elif method_type == 'GW' and simulation.gw is None:
                 simulation.gw = GW()
                 _set_if_enum(simulation.gw, 'type', getattr(model_method, 'type', None))
+                gw_basis = _basis_set_type_from_model_method(
+                    model_method, simulation.program_name
+                )
+                _set_if_enum(simulation.gw, 'basis_set_type', gw_basis)
             elif method_type == 'BSE' and simulation.bse is None:
                 simulation.bse = BSE()
                 _set_if_enum(
@@ -399,6 +542,10 @@ class ResultsNormalizerBase:
                 _set_if_enum(
                     simulation.bse, 'solver', getattr(model_method, 'solver', None)
                 )
+                bse_basis = _basis_set_type_from_model_method(
+                    model_method, simulation.program_name
+                )
+                _set_if_enum(simulation.bse, 'basis_set_type', bse_basis)
             elif method_type == 'DMFT' and simulation.dmft is None:
                 simulation.dmft = DMFT()
                 _set_if_enum(
@@ -430,6 +577,13 @@ class ResultsNormalizerBase:
                     chosen_method=method_tokens[0],
                     available_methods=method_tokens,
                 )
+
+        # Legacy-equivalent behavior for excited-state methods: when a DFT method
+        # is present in the same entry, carry over starting-point metadata.
+        if simulation.gw is not None:
+            _map_excited_state_starting_point(simulation.gw, simulation.dft)
+        if simulation.bse is not None:
+            _map_excited_state_starting_point(simulation.bse, simulation.dft)
 
     def _map_dos_data(self, dos_section) -> tuple[DOSNew, bool] | None:
         """Map one ElectronicDensityOfStates section into results DOSNew."""

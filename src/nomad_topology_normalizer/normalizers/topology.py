@@ -216,6 +216,25 @@ def add_system_info_2(  # noqa: PLR0912
                 symbols.append(chemical_symbols[state.atomic_number])
         return symbols
 
+    def _populate_chemistry(system: System, symbols: list[str]) -> None:
+        if not symbols:
+            return
+        formula = atomutils.Formula(''.join(symbols))
+        if not system.elements:
+            system.elements = formula.elements()
+        if system.chemical_formula_reduced is None:
+            system.chemical_formula_reduced = formula.format('reduced')
+        if system.chemical_formula_hill is None:
+            system.chemical_formula_hill = formula.format('hill')
+        if system.chemical_formula_iupac is None:
+            system.chemical_formula_iupac = formula.format('iupac')
+        if system.chemical_formula_anonymous is None:
+            system.chemical_formula_anonymous = formula.format('anonymous')
+        if system.chemical_formula_descriptive is None:
+            system.chemical_formula_descriptive = formula.format('descriptive')
+        if not system.elemental_composition:
+            system.elemental_composition = formula.elemental_composition()
+
     # Root/original node: derive atoms/cell directly from representative
     # v2 ModelSystem. Keep indices unset because downstream GUI logic uses
     # "no indices" to identify roots.
@@ -239,12 +258,7 @@ def add_system_info_2(  # noqa: PLR0912
                     system.cell = cell_from_ase_atoms(ase_atoms)
 
             symbols = _particle_symbols(particle_states)
-            if symbols:
-                formula = atomutils.Formula(''.join(symbols))
-                if system.chemical_composition_reduced is None:
-                    system.chemical_composition_reduced = formula.format('reduced')
-                if system.chemical_composition_hill is None:
-                    system.chemical_composition_hill = formula.format('hill')
+            _populate_chemistry(system, symbols)
         except Exception:
             pass
 
@@ -281,10 +295,8 @@ def add_system_info_2(  # noqa: PLR0912
         if not symbols:
             return
 
-        # Calculate chemical formulas
-        formula = atomutils.Formula(''.join(symbols))
-        system.chemical_composition_reduced = formula.format('reduced')
-        system.chemical_composition_hill = formula.format('hill')
+        # Calculate chemistry descriptors from the selected particle symbols.
+        _populate_chemistry(system, symbols)
     except Exception:
         pass
 
