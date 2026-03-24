@@ -940,22 +940,28 @@ class ResultsNormalizerBase:
         ):
             return
 
-        electronic = properties.electronic
-        if electronic is None:
-            electronic = properties.m_create(ElectronicProperties)
+        has_electronic_payload = bool(
+            band_gaps or dos_sections or band_structures or greens_functions
+        )
+        if has_electronic_payload:
+            electronic = properties.electronic
+            if electronic is None:
+                electronic = properties.m_create(ElectronicProperties)
 
-        for band_gap in band_gaps:
-            electronic.m_add_sub_section(ElectronicProperties.band_gap, band_gap)
-        for dos in dos_sections:
-            electronic.m_add_sub_section(ElectronicProperties.dos_electronic_new, dos)
-        for band_structure in band_structures:
-            electronic.m_add_sub_section(
-                ElectronicProperties.band_structure_electronic, band_structure
-            )
-        for greens in greens_functions:
-            electronic.m_add_sub_section(
-                ElectronicProperties.greens_functions_electronic, greens
-            )
+            for band_gap in band_gaps:
+                electronic.m_add_sub_section(ElectronicProperties.band_gap, band_gap)
+            for dos in dos_sections:
+                electronic.m_add_sub_section(
+                    ElectronicProperties.dos_electronic_new, dos
+                )
+            for band_structure in band_structures:
+                electronic.m_add_sub_section(
+                    ElectronicProperties.band_structure_electronic, band_structure
+                )
+            for greens in greens_functions:
+                electronic.m_add_sub_section(
+                    ElectronicProperties.greens_functions_electronic, greens
+                )
 
         if spectra_sections:
             spectroscopic = properties.spectroscopic

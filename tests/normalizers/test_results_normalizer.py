@@ -536,6 +536,50 @@ def test_data_schema_maps_outputs_electronic_properties():
     assert archive.results.properties.thermodynamic.trajectory
 
 
+def test_data_schema_does_not_create_empty_electronic_properties():
+    """Non-electronic outputs should not instantiate empty properties.electronic."""
+    archive = EntryArchive(metadata=EntryMetadata())
+    archive.results = Results()
+    archive.results.properties = Properties()
+
+    simulation = Simulation()
+    simulation.program = Program(name='VASP')
+    simulation.model_method.append(DFT())
+
+    model_system = ModelSystem(
+        name='test_system',
+        type='bulk',
+        is_representative=True,
+        positions=np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]]) * ureg.angstrom,
+        n_particles=2,
+    )
+    model_system.particle_states.append(
+        AtomsState(chemical_symbol='Si', atomic_number=14)
+    )
+    model_system.particle_states.append(
+        AtomsState(chemical_symbol='Si', atomic_number=14)
+    )
+    model_system.lattice_vectors = np.eye(3) * 5.43 * ureg.angstrom
+    model_system.periodic_boundary_conditions = [True, True, True]
+    simulation.model_system.append(model_system)
+
+    output = Outputs()
+    output.radii_of_gyration.append(SimRadiusOfGyration(value=1.2e-10 * ureg.meter))
+    output.temperatures.append(SimTemperature(value=300 * ureg.kelvin))
+    output.potential_energies.append(SimPotentialEnergy(value=-5.0 * ureg.eV))
+    simulation.outputs.append(output)
+    archive.data = simulation
+
+    normalizer = ResultsNormalizer()
+    normalizer.normalize(archive, LOGGER)
+
+    assert archive.results.properties.electronic is None
+    assert archive.results.properties.structural is not None
+    assert archive.results.properties.structural.radius_of_gyration
+    assert archive.results.properties.thermodynamic is not None
+    assert archive.results.properties.thermodynamic.trajectory
+
+
 def test_data_schema_logs_unmapped_output_groups(archive_with_data_schema, caplog):
     """Unsupported outputs should stay unset and produce a TODO log."""
     output = Outputs()
