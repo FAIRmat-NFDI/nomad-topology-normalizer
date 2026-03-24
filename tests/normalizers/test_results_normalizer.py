@@ -218,14 +218,14 @@ def test_schema_detection_nested_system(archive_with_nested_system, caplog):
         'v2 data schema results normalization' in record.message
         for record in caplog.records
     ), 'Nested SystemV2 should trigger v2 normalization'
+    # Keep this suite focused on routing. Detailed topology behavior is covered
+    # in test_topology_normalizer.py.
+    assert archive_with_nested_system.results is not None
+    assert archive_with_nested_system.results.material is not None
 
-    # Check that topology was created (meaning system_v2 was passed correctly)
-    assert archive_with_nested_system.results.material.topology
-    assert archive_with_nested_system.results.material.topology[0].label == 'original'
 
-
-def test_data_schema_creates_topology(archive_with_data_schema):
-    """Test that v2 data schema path creates topology."""
+def test_data_schema_initializes_results_sections(archive_with_data_schema):
+    """v2 data schema path should initialize key results sections."""
     normalizer = ResultsNormalizer()
 
     # Run normalization
@@ -234,27 +234,6 @@ def test_data_schema_creates_topology(archive_with_data_schema):
     # Check that results were populated
     assert archive_with_data_schema.results is not None
     assert archive_with_data_schema.results.material is not None
-
-    # Note: Topology creation depends on having proper structure data
-    # This test just verifies the path executes without error
-
-
-def test_data_schema_populates_root_topology_cell_and_atoms(archive_with_data_schema):
-    """Root topology node should expose cell metadata for visualization."""
-    normalizer = ResultsNormalizer()
-
-    normalizer.normalize(archive_with_data_schema, LOGGER)
-
-    topology = archive_with_data_schema.results.material.topology
-    assert topology
-
-    root = topology[0]
-    assert root.label == 'original'
-    assert root.indices is None  # root indices remain implicit in v2 schema
-    assert root.cell is not None
-    assert root.cell.a is not None
-    # Needed by structure visualizer root resolution and subsystem downloads
-    assert getattr(root, 'atoms', None) is not None or getattr(root, 'atoms_ref', None)
 
 
 def test_data_schema_populates_method_from_simulation():
