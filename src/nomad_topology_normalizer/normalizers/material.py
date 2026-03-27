@@ -76,6 +76,87 @@ class MaterialNormalizer:
                 merged[key] = value
         return merged
 
+    @staticmethod
+    def _dimensionality_to_results_enum(value) -> str | None:
+        """Convert various dimensionality representations to results enum values."""
+        if value is None:
+            return None
+        if isinstance(value, np.generic):
+            value = value.item()
+        if isinstance(value, (int, np.integer)):
+            return {0: '0D', 1: '1D', 2: '2D', 3: '3D'}.get(int(value))
+        if isinstance(value, str):
+            normalized = value.strip().upper()
+            if normalized in {'0D', '1D', '2D', '3D'}:
+                return normalized
+            if normalized in {'0', '1', '2', '3'}:
+                return {0: '0D', 1: '1D', 2: '2D', 3: '3D'}.get(int(normalized))
+        return None
+
+    @staticmethod
+    def _read_attr_or_key(container, name: str):
+        if container is None:
+            return None
+        if isinstance(container, dict):
+            return container.get(name)
+        return getattr(container, name, None)
+
+    @classmethod
+    def _labels_from_atoms_like(cls, atoms_like) -> list[str]:
+        """Extract chemical symbols from atoms-like data containers."""
+        if atoms_like is None:
+            return []
+
+        labels = cls._read_attr_or_key(atoms_like, 'labels')
+        if labels:
+            return [str(label) for label in labels if label]
+
+        atomic_numbers = cls._read_attr_or_key(atoms_like, 'atomic_numbers')
+        if atomic_numbers:
+            symbols = []
+            for atomic_number in atomic_numbers:
+                try:
+                    idx = int(atomic_number)
+                except Exception:
+                    continue
+                if 0 < idx < len(ase.data.chemical_symbols):
+                    symbols.append(ase.data.chemical_symbols[idx])
+            if symbols:
+                return symbols
+
+        species = cls._read_attr_or_key(atoms_like, 'species')
+        if species:
+            symbols = []
+            for specie in species:
+                if isinstance(specie, str):
+                    symbols.append(specie)
+                else:
+                    try:
+                        idx = int(specie)
+                    except Exception:
+                        continue
+                    if 0 < idx < len(ase.data.chemical_symbols):
+                        symbols.append(ase.data.chemical_symbols[idx])
+            if symbols:
+                return symbols
+
+        return []
+
+    @classmethod
+    def _labels_from_topology_root(cls, material: Material) -> list[str]:
+        topology = getattr(material, 'topology', None)
+        if not topology:
+            return []
+
+        root = topology[0]
+        atoms_ref = getattr(root, 'atoms_ref', None)
+        labels = cls._labels_from_atoms_like(atoms_ref)
+        if labels:
+            return labels
+
+        atoms = getattr(root, 'atoms', None)
+        return cls._labels_from_atoms_like(atoms)
+
     def material(self, populate_topology: bool = True) -> Material:
         """Returns a populated Material subsection."""
         material = self.entry_archive.m_setdefault('results.material')
@@ -86,11 +167,31 @@ class MaterialNormalizer:
             try:
                 # Get Hill formula from v2 schema
                 hill_formula = None
+                labels = None
                 if (
                     hasattr(self.repr_system, 'chemical_formula')
                     and self.repr_system.chemical_formula
                 ):
                     hill_formula = self.repr_system.chemical_formula.hill
+
+                if (
+                    not hill_formula
+                    and hasattr(self.repr_system, 'particle_states')
+                    and self.repr_system.particle_states
+                ):
+                    labels = [
+                        ps.chemical_symbol
+                        for ps in self.repr_system.particle_states
+                        if hasattr(ps, 'chemical_symbol') and ps.chemical_symbol
+                    ]
+                if not labels:
+                    labels = self._labels_from_atoms_like(
+                        self._read_attr_or_key(self.repr_system, 'atoms')
+                    )
+                if not labels:
+                    labels = self._labels_from_topology_root(material)
+                if not hill_formula and labels:
+                    hill_formula = Formula(''.join(labels)).format('hill')
 
                 if not hill_formula:
                     self.logger.warning(
@@ -111,7 +212,11 @@ class MaterialNormalizer:
                     pass
                 # Fallback: infer from system type if available
                 elif hasattr(self.repr_system, 'dimensionality'):
-                    material.dimensionality = self.repr_system.dimensionality
+                    dim_value = self._dimensionality_to_results_enum(
+                        self.repr_system.dimensionality
+                    )
+                    if dim_value is not None:
+                        material.dimensionality = dim_value
 
                 building_block_map = {
                     Surface: 'surface',
@@ -127,22 +232,6 @@ class MaterialNormalizer:
                 )
                 if building_block:
                     material.building_block = building_block
-
-                # Get particle labels for formula fragments
-                labels = None
-                if (
-                    hasattr(self.repr_system, 'particle_states')
-                    and self.repr_system.particle_states
-                ):
-                    # V2 schema: get labels from particle_states
-                    labels = [
-                        ps.chemical_symbol
-                        for ps in self.repr_system.particle_states
-                        if hasattr(ps, 'chemical_symbol') and ps.chemical_symbol
-                    ]
-                elif hasattr(self.repr_system, 'atoms') and self.repr_system.atoms:
-                    # Fallback to atoms if available
-                    labels = self.repr_system.atoms.get('labels')
 
                 if labels:
                     symbols, reduced_counts = atomutils.get_hill_decomposition(
