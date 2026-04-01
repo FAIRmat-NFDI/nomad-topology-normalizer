@@ -79,43 +79,17 @@ chemical_symbols: 'NDArray[np.str_]' = np.array(_chemical_symbols)
 with open(pathlib.Path(__file__).parent / 'data/top_50k_material_ids.json') as fin:
     top_50k_material_ids = json.load(fin)
 
-
-def _lazy_common():
-    from nomad.normalizing import common as _common
-
-    return _common
-
-
-def ase_atoms_from_nomad_atoms(*a, **k):
-    return _lazy_common().ase_atoms_from_nomad_atoms(*a, **k)
-
-
-def cell_from_ase_atoms(*a, **k):
-    return _lazy_common().cell_from_ase_atoms(*a, **k)
-
-
-def material_id_1d(*a, **k):
-    return _lazy_common().material_id_1d(*a, **k)
-
-
-def material_id_2d(*a, **k):
-    return _lazy_common().material_id_2d(*a, **k)
-
-
-def material_id_bulk(*a, **k):
-    return _lazy_common().material_id_bulk(*a, **k)
-
-
-def nomad_atoms_from_ase_atoms(*a, **k):
-    return _lazy_common().nomad_atoms_from_ase_atoms(*a, **k)
-
-
-def structures_2d(*a, **k):
-    return _lazy_common().structures_2d(*a, **k)
-
-
-def wyckoff_sets_from_matid(*a, **k):
-    return _lazy_common().wyckoff_sets_from_matid(*a, **k)
+# Import functions from plugin's own common.py
+from nomad_topology_normalizer.normalizers.common import (
+    ase_atoms_from_nomad_atoms,
+    cell_from_ase_atoms,
+    material_id_1d,
+    material_id_2d,
+    material_id_bulk,
+    nomad_atoms_from_ase_atoms,
+    structures_2d,
+    wyckoff_sets_from_matid,
+)
 
 
 def get_topology_id(index: int) -> str:
@@ -247,13 +221,10 @@ def add_system_info_2(  # noqa: PLR0912
 
             ase_atoms = parent_system.to_ase_atoms()
             if ase_atoms is not None:
-                # `results.System.atoms` exists only if runschema support is available.
-                try:
-                    has_atoms_payload = system.atoms is not None
-                except AttributeError:
-                    has_atoms_payload = True
-                if not has_atoms_payload:
-                    system.atoms = nomad_atoms_from_ase_atoms(ase_atoms)
+                # Populate System.atoms for GUI compatibility (molecular visualizer needs this)
+                # Even though this is runschema which is being phased out, the GUI still depends on it
+                system.atoms = nomad_atoms_from_ase_atoms(ase_atoms)
+
                 if system.cell is None:
                     system.cell = cell_from_ase_atoms(ase_atoms)
 
@@ -758,7 +729,7 @@ class TopologyNormalizer(Normalizer):
             structural_type='bulk',
             description=conventional_description,
         )
-        conv_system.atoms = nomad_atoms_from_ase_atoms(self.conv_atoms)
+        conv_system.atoms = nomad_atoms_from_ase_atoms(self.conv_atoms)  # GUI visualizer needs this
         symmetry_analyzer = None
         m_cache = getattr(self.repr_symmetry, 'm_cache', None)
         if m_cache is not None and hasattr(m_cache, 'get'):
@@ -808,7 +779,7 @@ class TopologyNormalizer(Normalizer):
             dimensionality='1D',
             structural_type='1D',
         )
-        conv_system.atoms = nomad_atoms_from_ase_atoms(self.conv_atoms)
+        conv_system.atoms = nomad_atoms_from_ase_atoms(self.conv_atoms)  # GUI visualizer needs this
         conv_system.cell = cell_from_ase_atoms(
             self.conv_atoms, masses=self.masses, atom_labels=None
         )
@@ -895,7 +866,7 @@ class TopologyNormalizer(Normalizer):
         # A big tolerance is used here to allow deviations from exact symmetry
         symm = SymmetryAnalyzer(cell, 1.0)
         conv_system = symm.get_conventional_system()
-        subsystem.atoms = nomad_atoms_from_ase_atoms(conv_system)
+        subsystem.atoms = nomad_atoms_from_ase_atoms(conv_system)  # GUI visualizer needs this
         spg_number = symm.get_space_group_number()
         subsystem.cell = cell_from_ase_atoms(
             conv_system, masses=self.masses, atom_labels=None
@@ -917,7 +888,7 @@ class TopologyNormalizer(Normalizer):
         subsystem.cell = cell_from_ase_atoms(
             conv_atoms, masses=self.masses, atom_labels=None
         )
-        subsystem.atoms = nomad_atoms_from_ase_atoms(conv_atoms)
+        subsystem.atoms = nomad_atoms_from_ase_atoms(conv_atoms)  # GUI visualizer needs this
 
         # Here we zero out the irrelevant lattice parameters to correctly handle
         # 2D systems with nonzero thickness (e.g. MoS2).

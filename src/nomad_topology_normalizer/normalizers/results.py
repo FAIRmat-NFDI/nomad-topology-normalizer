@@ -146,6 +146,13 @@ from nomad.datamodel.results import (
 from nomad.units import ureg
 from nomad.utils import extract_section, traverse_reversed
 
+# Import runschema for DOS compatibility mapping
+try:
+    import runschema.run
+    import runschema.calculation
+except ImportError:
+    runschema = None
+
 from nomad_topology_normalizer.normalizers.common import structures_2d
 from nomad_topology_normalizer.normalizers.method import MethodNormalizer
 
@@ -585,8 +592,19 @@ class ResultsNormalizerBase:
         if simulation.bse is not None:
             _map_excited_state_starting_point(simulation.bse, simulation.dft)
 
-    def _map_dos_data(self, dos_section) -> tuple[DOSNew, bool] | None:
-        """Map one ElectronicDensityOfStates section into results DOSNew."""
+    def _create_legacy_calculation_for_dos(self):
+        """Create a calculation section to host legacy DOS references."""
+        if not runschema:
+            return None
+
+        run_sections = getattr(self.entry_archive, 'run', None) or []
+        run_section = run_sections[-1] if run_sections else self.entry_archive.m_create(
+            runschema.run.Run
+        )
+        return run_section.m_create(runschema.calculation.Calculation)
+
+    def _map_dos_data(self, dos_section, legacy_calculation) -> tuple[Any, bool] | None:
+        """Map one ElectronicDensityOfStates into a legacy runschema Dos section."""
         energies_points = getattr(
             getattr(dos_section, 'energies', None), 'points', None
         )
@@ -599,35 +617,34 @@ class ResultsNormalizerBase:
         except Exception:
             return None
 
-        # Build expected legacy DOS section types from result schema metadata.
-        energies_type = DOSNew.m_def.all_quantities['energies'].type
-        total_type = DOSNew.m_def.all_quantities['total'].type
-        legacy_dos_cls = energies_type.target_quantity_def.m_parent.section_cls
-        legacy_total_cls = total_type.target_section_def.section_cls
+        if not runschema or legacy_calculation is None:
+            return None
 
-        legacy_dos = legacy_dos_cls()
-        setattr(legacy_dos, energies_type.target_quantity_def.name, energies_points)
-        legacy_total = legacy_total_cls()
+        legacy_dos = runschema.calculation.Dos()
+        legacy_dos.energies = energies_points
+
+        legacy_total = runschema.calculation.DosValues()
         legacy_total.value = values
-        setattr(legacy_dos, 'total', [legacy_total])
+        spin_ch = getattr(dos_section, 'spin_channel', 0)
+        if spin_ch is not None:
+            legacy_total.spin = spin_ch
+        legacy_dos.total = [legacy_total]
 
-        dos_data = DOSNew()
-        dos_data.energies = legacy_dos
-        dos_data.total = legacy_total
-        dos_data.spin_channel = getattr(dos_section, 'spin_channel', None)
-        energies_origin = getattr(dos_section, 'energies_origin', None)
-        if energies_origin is not None:
-            dos_data.energy_ref = energies_origin
+        legacy_calculation.m_add_sub_section(
+            runschema.calculation.Calculation.dos_electronic, legacy_dos
+        )
 
         has_projected = bool(getattr(dos_section, 'projected_dos', None))
-        return dos_data, has_projected
+        return legacy_dos, has_projected
 
     def _map_band_structure(
-        self, band_structure_section
+        self, band_structure_section, legacy_calculation
     ) -> BandStructureElectronic | None:
         """Map one ElectronicBandStructure into results BandStructureElectronic."""
         values = getattr(band_structure_section, 'value', None)
         if values is None:
+            return None
+        if not runschema or legacy_calculation is None:
             return None
         try:
             if not valid_array(np.array(values.magnitude)):
@@ -635,9 +652,6 @@ class ResultsNormalizerBase:
         except Exception:
             return None
 
-        segment_type = BandStructureElectronic.m_def.all_quantities['segment'].type
-        segment_cls = segment_type.target_section_def.section_cls
-        segment = segment_cls()
         energies_array = np.array(values.magnitude)
         if energies_array.ndim == 0:
             energies_array = energies_array[np.newaxis, np.newaxis, np.newaxis]
@@ -645,31 +659,36 @@ class ResultsNormalizerBase:
             energies_array = energies_array[np.newaxis, :, np.newaxis]
         elif energies_array.ndim == 2:
             energies_array = energies_array[np.newaxis, :, :]
-        segment.energies = energies_array * values.u
+        legacy_segment = runschema.calculation.BandEnergies()
+        legacy_segment.energies = energies_array * values.u
 
         k_points = getattr(
             getattr(band_structure_section, 'k_path', None), 'points', None
         )
-        if k_points is not None and valid_array(k_points):
-            segment.kpoints = k_points
+        if not valid_array(k_points):
+            # Legacy/GUI path requires kpoints for distance axis construction.
+            return None
+        legacy_segment.kpoints = k_points
 
-        band_structure = BandStructureElectronic()
-        band_structure.segment = [segment]
+        legacy_band_structure = runschema.calculation.BandStructure()
+        legacy_band_structure.segment = [legacy_segment]
         reciprocal_cell = getattr(band_structure_section, 'reciprocal_cell', None)
         if reciprocal_cell is not None:
-            band_structure_ref_type = BandStructureElectronic.m_def.all_quantities[
-                'reciprocal_cell'
-            ].type
-            band_structure_ref_cls = (
-                band_structure_ref_type.target_quantity_def.m_parent.section_cls
-            )
-            band_structure_ref = band_structure_ref_cls()
-            setattr(
-                band_structure_ref,
-                band_structure_ref_type.target_quantity_def.name,
-                reciprocal_cell,
-            )
-            band_structure.reciprocal_cell = band_structure_ref
+            try:
+                legacy_band_structure.reciprocal_cell = reciprocal_cell
+            except Exception:
+                pass
+        legacy_calculation.m_add_sub_section(
+            runschema.calculation.Calculation.band_structure_electronic,
+            legacy_band_structure,
+        )
+
+        band_structure = BandStructureElectronic()
+        band_structure.segment = legacy_band_structure.segment
+        try:
+            band_structure.reciprocal_cell = legacy_band_structure
+        except Exception:
+            pass
 
         band_structure.spin_polarized = energies_array.shape[0] == 2
         return band_structure
@@ -993,14 +1012,19 @@ class ResultsNormalizerBase:
         if not outputs:
             return
 
+        had_dos_input = any(
+            len(getattr(output, 'electronic_dos', []) or []) > 0 for output in outputs
+        )
         properties = archive.results.properties
         if properties is None:
             properties = archive.results.m_create(Properties)
 
-        band_gaps: list[BandGap] = []
-        dos_sections: list[DOSElectronicNew] = []
-        band_structures: list[BandStructureElectronic] = []
-        greens_functions: list[GreensFunctionsElectronic] = []
+        # Keep legacy-equivalent behavior: electronic properties should represent
+        # the latest relevant output payload, while trajectory/spectra can aggregate.
+        latest_band_gaps: list[BandGap] = []
+        latest_dos_sections: list[DOSElectronic] = []
+        latest_band_structures: list[BandStructureElectronic] = []
+        latest_greens_functions: list[GreensFunctionsElectronic] = []
         spectra_sections: list[Spectra] = []
         rg_sections: list[RadiusOfGyration] = []
         temperature_series: list[float] = []
@@ -1009,18 +1033,26 @@ class ResultsNormalizerBase:
         potential_energy_time: list[float] = []
 
         for index, output in enumerate(outputs):
+            output_band_gaps: list[BandGap] = []
+            output_dos_sections: list[DOSElectronic] = []
+            output_band_structures: list[BandStructureElectronic] = []
+            output_greens_functions: list[GreensFunctionsElectronic] = []
+
             for bg in getattr(output, 'electronic_band_gaps', []) or []:
                 if getattr(bg, 'value', None) is None:
                     continue
                 bg_result = BandGap()
                 bg_result.value = bg.value
                 bg_result.type = getattr(bg, 'type', None)
-                band_gaps.append(bg_result)
+                output_band_gaps.append(bg_result)
 
-            dos_data_sections: list[DOSNew] = []
+            dos_data_sections: list[Any] = []
             has_projected = False
+            legacy_calculation = None
             for dos in getattr(output, 'electronic_dos', []) or []:
-                mapped = self._map_dos_data(dos)
+                if legacy_calculation is None:
+                    legacy_calculation = self._create_legacy_calculation_for_dos()
+                mapped = self._map_dos_data(dos, legacy_calculation)
                 if mapped is None:
                     continue
                 dos_data, projected = mapped
@@ -1028,22 +1060,39 @@ class ResultsNormalizerBase:
                 has_projected = has_projected or projected
 
             if dos_data_sections:
-                dos_result = DOSElectronicNew()
-                dos_result.spin_polarized = len(dos_data_sections) == 2
-                dos_result.has_projected = has_projected
-                dos_result.data = dos_data_sections
-                dos_sections.append(dos_result)
+                totals = [d.total[0] for d in dos_data_sections if getattr(d, 'total', None)]
+                if totals:
+                    dos_result = DOSElectronic()
+                    dos_result.energies = dos_data_sections[0]
+                    dos_result.total = totals
+                    dos_result.spin_polarized = len(dos_data_sections) == 2
+                    output_dos_sections.append(dos_result)
 
             for band_structure in (
                 getattr(output, 'electronic_band_structures', []) or []
             ):
-                mapped_band_structure = self._map_band_structure(band_structure)
+                if legacy_calculation is None:
+                    legacy_calculation = self._create_legacy_calculation_for_dos()
+                mapped_band_structure = self._map_band_structure(
+                    band_structure, legacy_calculation
+                )
                 if mapped_band_structure:
-                    band_structures.append(mapped_band_structure)
+                    output_band_structures.append(mapped_band_structure)
 
             mapped_greens_functions = self._map_greens_functions(output)
             if mapped_greens_functions:
-                greens_functions.append(mapped_greens_functions)
+                output_greens_functions.append(mapped_greens_functions)
+
+            if (
+                output_band_gaps
+                or output_dos_sections
+                or output_band_structures
+                or output_greens_functions
+            ):
+                latest_band_gaps = output_band_gaps
+                latest_dos_sections = output_dos_sections
+                latest_band_structures = output_band_structures
+                latest_greens_functions = output_greens_functions
 
             for absorption in getattr(output, 'absorption_spectra', []) or []:
                 mapped_spectrum = self._map_spectrum(absorption, 'unavailable')
@@ -1083,36 +1132,42 @@ class ResultsNormalizerBase:
                 potential_energy_time.append(float(point_time))
 
         if not (
-            band_gaps
-            or dos_sections
-            or band_structures
-            or greens_functions
+            latest_band_gaps
+            or latest_dos_sections
+            or latest_band_structures
+            or latest_greens_functions
             or spectra_sections
             or rg_sections
             or temperature_series
             or potential_energy_series
         ):
+            if had_dos_input:
+                self.logger.warning(
+                    'Skipping DOS compatibility mapping for dos_electronic: '
+                    'could not build references from v2 outputs.'
+                )
             return
 
         has_electronic_payload = bool(
-            band_gaps or dos_sections or band_structures or greens_functions
+            latest_band_gaps
+            or latest_dos_sections
+            or latest_band_structures
+            or latest_greens_functions
         )
         if has_electronic_payload:
             electronic = properties.electronic
             if electronic is None:
                 electronic = properties.m_create(ElectronicProperties)
 
-            for band_gap in band_gaps:
+            for band_gap in latest_band_gaps:
                 electronic.m_add_sub_section(ElectronicProperties.band_gap, band_gap)
-            for dos in dos_sections:
-                electronic.m_add_sub_section(
-                    ElectronicProperties.dos_electronic_new, dos
-                )
-            for band_structure in band_structures:
+            for dos in latest_dos_sections:
+                electronic.m_add_sub_section(ElectronicProperties.dos_electronic, dos)
+            for band_structure in latest_band_structures:
                 electronic.m_add_sub_section(
                     ElectronicProperties.band_structure_electronic, band_structure
                 )
-            for greens in greens_functions:
+            for greens in latest_greens_functions:
                 electronic.m_add_sub_section(
                     ElectronicProperties.greens_functions_electronic, greens
                 )
@@ -1156,6 +1211,12 @@ class ResultsNormalizerBase:
                 thermodynamic.m_add_sub_section(
                     ThermodynamicProperties.trajectory, trajectory
                 )
+
+        if had_dos_input and not latest_dos_sections:
+            self.logger.warning(
+                'Skipping DOS compatibility mapping for dos_electronic: '
+                'could not build references from v2 outputs.'
+            )
 
         self._log_unmapped_output_groups(outputs)
 

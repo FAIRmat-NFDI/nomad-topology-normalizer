@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 from nomad.datamodel import EntryArchive, EntryMetadata
 from nomad.datamodel.data import ArchiveSection
+from nomad.metainfo import Quantity
 from nomad.datamodel.results import Properties, Results
 from nomad.units import ureg
 from nomad.utils import get_logger
@@ -45,7 +46,21 @@ from nomad_topology_normalizer.normalizers.results import (
     ResultsNormalizerBase as ResultsNormalizer,
 )
 
+try:
+    import runschema.calculation  # noqa: F401
+
+    HAS_RUNSCHEMA = True
+except Exception:
+    HAS_RUNSCHEMA = False
+
 LOGGER = get_logger(__name__)
+
+
+def _kline_path():
+    class _DummyKPath(ArchiveSection):
+        points = Quantity(type=np.float64, shape=['*', 3])
+
+    return _DummyKPath(points=np.array([[0.0, 0.0, 0.0], [0.5, 0.5, 0.5]]))
 
 
 @pytest.fixture
@@ -495,6 +510,7 @@ def test_data_schema_maps_outputs_electronic_properties():
     dos.energies = Energy2(points=np.array([-1.0, 0.0, 1.0]) * ureg.eV)
     output.electronic_dos.append(dos)
     band_structure = ElectronicBandStructure(value=np.array([[1.0, 1.1]]) * ureg.eV)
+    band_structure.k_path = _kline_path()
     output.electronic_band_structures.append(band_structure)
     greens_function = ElectronicGreensFunction(value=(1.0 + 0.0j) / ureg.eV)
     greens_function.matsubara_frequency = MatsubaraFrequency(
@@ -522,10 +538,11 @@ def test_data_schema_maps_outputs_electronic_properties():
     assert electronic is not None
     assert electronic.band_gap
     assert electronic.band_gap[0].value is not None
-    assert electronic.dos_electronic_new
-    assert electronic.dos_electronic_new[0].data
-    assert electronic.dos_electronic_new[0].data[0].energies is not None
-    assert electronic.dos_electronic_new[0].data[0].total is not None
+    if HAS_RUNSCHEMA:
+        assert not electronic.dos_electronic_new
+        assert electronic.dos_electronic
+    else:
+        assert not electronic.dos_electronic_new
     assert electronic.band_structure_electronic
     assert electronic.band_structure_electronic[0].segment
     assert archive.results.properties.spectroscopic is not None
@@ -534,6 +551,213 @@ def test_data_schema_maps_outputs_electronic_properties():
     assert archive.results.properties.structural.radius_of_gyration
     assert archive.results.properties.thermodynamic is not None
     assert archive.results.properties.thermodynamic.trajectory
+
+
+def test_data_schema_uses_latest_output_for_electronic_properties():
+    """Electronic mapping should keep latest output payload for legacy parity."""
+    archive = EntryArchive(metadata=EntryMetadata())
+    archive.results = Results()
+    archive.results.properties = Properties()
+
+    simulation = Simulation()
+    simulation.program = Program(name='VASP')
+    simulation.model_method.append(DFT())
+
+    model_system = ModelSystem(
+        name='test_system',
+        type='bulk',
+        is_representative=True,
+        positions=np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]]) * ureg.angstrom,
+        n_particles=2,
+    )
+    model_system.particle_states.append(
+        AtomsState(chemical_symbol='Si', atomic_number=14)
+    )
+    model_system.particle_states.append(
+        AtomsState(chemical_symbol='Si', atomic_number=14)
+    )
+    model_system.lattice_vectors = np.eye(3) * 5.43 * ureg.angstrom
+    model_system.periodic_boundary_conditions = [True, True, True]
+    simulation.model_system.append(model_system)
+
+    output_1 = Outputs()
+    output_1.electronic_band_gaps.append(ElectronicBandGap(value=1.5 * ureg.eV))
+    band_structure_1 = ElectronicBandStructure(value=np.array([[1.0, 1.1]]) * ureg.eV)
+    band_structure_1.k_path = _kline_path()
+    output_1.electronic_band_structures.append(band_structure_1)
+    simulation.outputs.append(output_1)
+
+    output_2 = Outputs()
+    output_2.electronic_band_gaps.append(ElectronicBandGap(value=2.5 * ureg.eV))
+    band_structure_2 = ElectronicBandStructure(value=np.array([[2.0, 2.1]]) * ureg.eV)
+    band_structure_2.k_path = _kline_path()
+    output_2.electronic_band_structures.append(band_structure_2)
+    simulation.outputs.append(output_2)
+
+    archive.data = simulation
+
+    normalizer = ResultsNormalizer()
+    normalizer.normalize(archive, LOGGER)
+
+    electronic = archive.results.properties.electronic
+    assert electronic is not None
+    assert len(electronic.band_gap or []) == 1
+    assert electronic.band_gap[0].value.magnitude == pytest.approx(2.5)
+    assert len(electronic.band_structure_electronic or []) == 1
+
+
+def test_data_schema_band_structure_references_are_not_root_paths():
+    """Band structure segment refs should point to concrete run/calculation paths."""
+    archive = EntryArchive(metadata=EntryMetadata())
+    archive.results = Results()
+    archive.results.properties = Properties()
+
+    simulation = Simulation()
+    simulation.program = Program(name='VASP')
+    simulation.model_method.append(DFT())
+
+    model_system = ModelSystem(
+        name='test_system',
+        type='bulk',
+        is_representative=True,
+        positions=np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]]) * ureg.angstrom,
+        n_particles=2,
+    )
+    model_system.particle_states.append(
+        AtomsState(chemical_symbol='Si', atomic_number=14)
+    )
+    model_system.particle_states.append(
+        AtomsState(chemical_symbol='Si', atomic_number=14)
+    )
+    model_system.lattice_vectors = np.eye(3) * 5.43 * ureg.angstrom
+    model_system.periodic_boundary_conditions = [True, True, True]
+    simulation.model_system.append(model_system)
+
+    output = Outputs()
+    band_structure = ElectronicBandStructure(value=np.array([[1.0, 1.1]]) * ureg.eV)
+    band_structure.k_path = _kline_path()
+    output.electronic_band_structures.append(band_structure)
+    simulation.outputs.append(output)
+    archive.data = simulation
+
+    normalizer = ResultsNormalizer()
+    normalizer.normalize(archive, LOGGER)
+
+    serialized = archive.m_to_dict()
+    bs = (
+        serialized.get('results', {})
+        .get('properties', {})
+        .get('electronic', {})
+        .get('band_structure_electronic', [])
+    )
+    assert bs
+    segment_refs = bs[0].get('segment', [])
+    assert segment_refs
+    assert all(ref != '/' for ref in segment_refs)
+    assert all(ref.startswith('/run/') for ref in segment_refs)
+
+
+def test_data_schema_populates_deprecated_dos_mapping():
+    """v2 DOS mapping writes deprecated dos_electronic compatibility mirror."""
+    archive = EntryArchive(metadata=EntryMetadata())
+    archive.results = Results()
+    archive.results.properties = Properties()
+
+    simulation = Simulation()
+    simulation.program = Program(name='VASP')
+    simulation.model_method.append(DFT())
+
+    model_system = ModelSystem(
+        name='test_system',
+        type='bulk',
+        is_representative=True,
+        positions=np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]]) * ureg.angstrom,
+        n_particles=2,
+    )
+    model_system.particle_states.append(
+        AtomsState(chemical_symbol='Si', atomic_number=14)
+    )
+    model_system.particle_states.append(
+        AtomsState(chemical_symbol='Si', atomic_number=14)
+    )
+    model_system.lattice_vectors = np.eye(3) * 5.43 * ureg.angstrom
+    model_system.periodic_boundary_conditions = [True, True, True]
+    simulation.model_system.append(model_system)
+
+    output = Outputs()
+    dos = ElectronicDensityOfStates(
+        value=np.array([0.1, 0.2, 0.3]) / ureg.eV,
+        spin_channel=0,
+    )
+    dos.energies = Energy2(points=np.array([-1.0, 0.0, 1.0]) * ureg.eV)
+    output.electronic_dos.append(dos)
+    simulation.outputs.append(output)
+    archive.data = simulation
+
+    normalizer = ResultsNormalizer()
+    normalizer.normalize(archive, LOGGER)
+
+    electronic = archive.results.properties.electronic
+    if HAS_RUNSCHEMA:
+        assert electronic is not None
+        assert not electronic.dos_electronic_new
+        assert electronic.dos_electronic
+    else:
+        assert electronic is None or not electronic.dos_electronic_new
+        assert electronic is None or not electronic.dos_electronic
+
+
+def test_data_schema_populates_deprecated_dos_with_references():
+    """Deprecated dos_electronic should be emitted with valid references."""
+    archive = EntryArchive(metadata=EntryMetadata())
+    archive.results = Results()
+    archive.results.properties = Properties()
+
+    simulation = Simulation()
+    simulation.program = Program(name='VASP')
+    simulation.model_method.append(DFT())
+
+    model_system = ModelSystem(
+        name='test_system',
+        type='bulk',
+        is_representative=True,
+        positions=np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]]) * ureg.angstrom,
+        n_particles=2,
+    )
+    model_system.particle_states.append(
+        AtomsState(chemical_symbol='Si', atomic_number=14)
+    )
+    model_system.particle_states.append(
+        AtomsState(chemical_symbol='Si', atomic_number=14)
+    )
+    model_system.lattice_vectors = np.eye(3) * 5.43 * ureg.angstrom
+    model_system.periodic_boundary_conditions = [True, True, True]
+    simulation.model_system.append(model_system)
+
+    output = Outputs()
+    dos = ElectronicDensityOfStates(
+        value=np.array([0.1, 0.2, 0.3]) / ureg.eV,
+        spin_channel=0,
+    )
+    dos.energies = Energy2(points=np.array([-1.0, 0.0, 1.0]) * ureg.eV)
+    output.electronic_dos.append(dos)
+    simulation.outputs.append(output)
+    archive.data = simulation
+
+    normalizer = ResultsNormalizer()
+    normalizer.normalize(archive, LOGGER)
+
+    electronic = archive.results.properties.electronic
+    if HAS_RUNSCHEMA:
+        assert electronic is not None
+        assert not electronic.dos_electronic_new
+        assert electronic.dos_electronic
+        dos = electronic.dos_electronic[0]
+        assert dos.energies is not None
+        assert dos.total
+    else:
+        assert electronic is None or not electronic.dos_electronic_new
+        assert electronic is None or not electronic.dos_electronic
 
 
 def test_data_schema_does_not_create_empty_electronic_properties():
@@ -597,6 +821,34 @@ def test_data_schema_logs_unmapped_output_groups(archive_with_data_schema, caplo
     assert properties.vibrational is None
     assert properties.magnetic is None
     assert properties.dynamical is None
+
+
+def test_data_schema_skips_dos_cleanly_without_runschema(
+    archive_with_data_schema, caplog
+):
+    """DOS mapping should skip cleanly when runschema-based refs cannot be built."""
+    output = Outputs()
+    dos = ElectronicDensityOfStates(
+        value=np.array([0.1, 0.2, 0.3]) / ureg.eV,
+        spin_channel=0,
+    )
+    dos.energies = Energy2(points=np.array([-1.0, 0.0, 1.0]) * ureg.eV)
+    output.electronic_dos.append(dos)
+    archive_with_data_schema.data.outputs.append(output)
+
+    normalizer = ResultsNormalizer()
+    caplog.clear()
+    normalizer.normalize(archive_with_data_schema, LOGGER)
+
+    properties = archive_with_data_schema.results.properties
+    electronic = properties.electronic
+    if HAS_RUNSCHEMA:
+        assert electronic is not None
+        assert electronic.dos_electronic
+        assert not electronic.dos_electronic_new
+    else:
+        assert electronic is None or not electronic.dos_electronic_new
+        assert 'Skipping DOS compatibility mapping for dos_electronic' in caplog.text
 
 
 def test_data_schema_priority_over_run(archive_with_data_schema):
