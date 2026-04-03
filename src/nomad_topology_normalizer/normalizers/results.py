@@ -592,7 +592,7 @@ class ResultsNormalizerBase:
         if simulation.bse is not None:
             _map_excited_state_starting_point(simulation.bse, simulation.dft)
 
-    def _map_dos_data(self, dos_section) -> tuple[Any, Any, bool] | None:
+    def _map_dos_data(self, dos_section) -> tuple[Any, bool] | None:
         """Map one ElectronicDensityOfStates into DOSElectronic-compatible payload."""
         energies_points = getattr(
             getattr(dos_section, 'energies', None), 'points', None
@@ -609,14 +609,18 @@ class ResultsNormalizerBase:
         if not runschema:
             return None
 
+        legacy_dos = runschema.calculation.Dos()
+        legacy_dos.energies = energies_points
+
         legacy_total = runschema.calculation.DosValues()
         legacy_total.value = values
         spin_ch = getattr(dos_section, 'spin_channel', 0)
         if spin_ch is not None:
             legacy_total.spin = spin_ch
+        legacy_dos.total = [legacy_total]
 
         has_projected = bool(getattr(dos_section, 'projected_dos', None))
-        return energies_points, legacy_total, has_projected
+        return legacy_dos, has_projected
 
     def _map_band_structure(self, band_structure_section) -> BandStructureElectronic | None:
         """Map one ElectronicBandStructure into results BandStructureElectronic."""
@@ -1015,24 +1019,26 @@ class ResultsNormalizerBase:
                 bg_result.type = getattr(bg, 'type', None)
                 output_band_gaps.append(bg_result)
 
-            dos_energy_sections: list[Any] = []
-            dos_total_sections: list[Any] = []
+            dos_data_sections: list[Any] = []
             has_projected = False
             for dos in getattr(output, 'electronic_dos', []) or []:
                 mapped = self._map_dos_data(dos)
                 if mapped is None:
                     continue
-                dos_energies, dos_total, projected = mapped
-                dos_energy_sections.append(dos_energies)
-                dos_total_sections.append(dos_total)
+                dos_data, projected = mapped
+                dos_data_sections.append(dos_data)
                 has_projected = has_projected or projected
 
-            if dos_total_sections and dos_energy_sections:
-                dos_result = DOSElectronic()
-                dos_result.energies = dos_energy_sections[0]
-                dos_result.total = dos_total_sections
-                dos_result.spin_polarized = len(dos_total_sections) == 2
-                output_dos_sections.append(dos_result)
+            if dos_data_sections:
+                totals = [
+                    d.total[0] for d in dos_data_sections if getattr(d, 'total', None)
+                ]
+                if totals:
+                    dos_result = DOSElectronic()
+                    dos_result.energies = dos_data_sections[0]
+                    dos_result.total = totals
+                    dos_result.spin_polarized = len(dos_data_sections) == 2
+                    output_dos_sections.append(dos_result)
 
             for band_structure in (
                 getattr(output, 'electronic_band_structures', []) or []

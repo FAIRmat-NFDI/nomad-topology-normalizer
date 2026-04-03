@@ -755,6 +755,7 @@ def test_data_schema_populates_deprecated_dos_with_references():
         assert electronic.dos_electronic
         dos = electronic.dos_electronic[0]
         assert dos.energies is not None
+        assert dos.energies.m_is_set
         assert dos.total
     else:
         assert electronic is None or not electronic.dos_electronic_new
