@@ -109,6 +109,50 @@ def test_topology_calculation_with_subsystem():
     assert len(result) > 0
 
 
+def test_topology_root_populates_atoms_when_ase_conversion_fails(monkeypatch):
+    archive = EntryArchive(metadata=EntryMetadata())
+
+    root = ModelSystem(
+        name='test_system',
+        type='molecule',
+        is_representative=True,
+        positions=np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]]) * ureg.angstrom,
+        n_particles=2,
+    )
+    root.periodic_boundary_conditions = [True, True, True]
+    root.particle_states.append(AtomsState(chemical_symbol='H', atomic_number=1))
+    root.particle_states.append(AtomsState(chemical_symbol='H', atomic_number=1))
+    subsystem = ModelSystem(
+        name='molecule',
+        branch_label='molecule',
+        particle_indices=np.array([0, 1], dtype=np.int32),
+    )
+    root.sub_systems.append(subsystem)
+
+    simulation = Simulation()
+    simulation.model_system.append(root)
+    archive.data = simulation
+    archive.results = Results()
+    archive.results.material = Material()
+
+    def _raise_to_ase_atoms(self):
+        raise ValueError('forced failure for fallback path test')
+
+    monkeypatch.setattr(ModelSystem, 'to_ase_atoms', _raise_to_ase_atoms)
+
+    normalizer = TopologyNormalizer()
+    normalizer.normalize(archive, LOGGER)
+
+    topology = archive.results.material.topology
+    assert topology is not None
+    assert len(topology) > 0
+    original = topology[0]
+    assert original.label == 'original'
+    assert original.atoms is not None
+    assert original.atoms.positions is not None
+    assert len(original.atoms.positions) == 2
+
+
 def test_topology_calculation_nested_subsystems():
     """Test nested hierarchy: root -> molecule_group -> molecule."""
 

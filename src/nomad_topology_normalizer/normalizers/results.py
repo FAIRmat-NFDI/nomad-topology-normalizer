@@ -592,8 +592,8 @@ class ResultsNormalizerBase:
         if simulation.bse is not None:
             _map_excited_state_starting_point(simulation.bse, simulation.dft)
 
-    def _map_dos_data(self, dos_section) -> tuple[Any, bool] | None:
-        """Map one ElectronicDensityOfStates into DOSElectronic-compatible payload."""
+    def _map_dos_data(self, dos_section, output_index: int, dos_index: int) -> dict | None:
+        """Map one ElectronicDensityOfStates into DOSElectronic-compatible refs."""
         energies_points = getattr(
             getattr(dos_section, 'energies', None), 'points', None
         )
@@ -606,21 +606,14 @@ class ResultsNormalizerBase:
         except Exception:
             return None
 
-        if not runschema:
-            return None
-
-        legacy_dos = runschema.calculation.Dos()
-        legacy_dos.energies = energies_points
-
-        legacy_total = runschema.calculation.DosValues()
-        legacy_total.value = values
         spin_ch = getattr(dos_section, 'spin_channel', 0)
-        if spin_ch is not None:
-            legacy_total.spin = spin_ch
-        legacy_dos.total = [legacy_total]
-
         has_projected = bool(getattr(dos_section, 'projected_dos', None))
-        return legacy_dos, has_projected
+        return {
+            'energies_ref': f'/data/outputs/{output_index}/electronic_dos/{dos_index}/energies/points',
+            'total_ref': f'/data/outputs/{output_index}/electronic_dos/{dos_index}',
+            'spin_channel': spin_ch,
+            'has_projected': has_projected,
+        }
 
     def _map_band_structure(self, band_structure_section) -> BandStructureElectronic | None:
         """Map one ElectronicBandStructure into results BandStructureElectronic."""
@@ -1019,23 +1012,20 @@ class ResultsNormalizerBase:
                 bg_result.type = getattr(bg, 'type', None)
                 output_band_gaps.append(bg_result)
 
-            dos_data_sections: list[Any] = []
+            dos_data_sections: list[dict] = []
             has_projected = False
-            for dos in getattr(output, 'electronic_dos', []) or []:
-                mapped = self._map_dos_data(dos)
+            for dos_index, dos in enumerate(getattr(output, 'electronic_dos', []) or []):
+                mapped = self._map_dos_data(dos, index, dos_index)
                 if mapped is None:
                     continue
-                dos_data, projected = mapped
-                dos_data_sections.append(dos_data)
-                has_projected = has_projected or projected
+                dos_data_sections.append(mapped)
+                has_projected = has_projected or mapped['has_projected']
 
             if dos_data_sections:
-                totals = [
-                    d.total[0] for d in dos_data_sections if getattr(d, 'total', None)
-                ]
+                totals = [d['total_ref'] for d in dos_data_sections if d.get('total_ref')]
                 if totals:
                     dos_result = DOSElectronic()
-                    dos_result.energies = dos_data_sections[0]
+                    dos_result.energies = dos_data_sections[0]['energies_ref']
                     dos_result.total = totals
                     dos_result.spin_polarized = len(dos_data_sections) == 2
                     output_dos_sections.append(dos_result)
@@ -1126,6 +1116,14 @@ class ResultsNormalizerBase:
             electronic = properties.electronic
             if electronic is None:
                 electronic = properties.m_create(ElectronicProperties)
+
+            # In v2 mapping mode, these compatibility sections are authoritative.
+            # Replace pre-existing values to avoid leaving malformed stale entries
+            # that can break downstream GUI resolvers.
+            electronic.band_gap = []
+            electronic.dos_electronic = []
+            electronic.band_structure_electronic = []
+            electronic.greens_functions_electronic = []
 
             for band_gap in latest_band_gaps:
                 electronic.m_add_sub_section(ElectronicProperties.band_gap, band_gap)

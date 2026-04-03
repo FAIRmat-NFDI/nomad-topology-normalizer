@@ -48,6 +48,7 @@ from nomad.config import config
 from nomad.datamodel.datamodel import EntryArchive
 from nomad.datamodel.metainfo.basesections.v2 import SubSystem as SubSystemV2
 from nomad.datamodel.metainfo.basesections.v2 import System as SystemV2
+from nomad.datamodel.metainfo.system import Atoms as NOMADAtoms
 from nomad.datamodel.results import (
     CoreHole,
     Material,
@@ -209,6 +210,50 @@ def add_system_info_2(  # noqa: PLR0912
         if not system.elemental_composition:
             system.elemental_composition = formula.elemental_composition()
 
+    def _nomad_atoms_from_model_system(model_system) -> NOMADAtoms | None:
+        positions = getattr(model_system, 'positions', None)
+        if positions is None:
+            return None
+
+        particle_states = getattr(model_system, 'particle_states', None) or []
+        labels = []
+        atomic_numbers = []
+        for state in particle_states:
+            symbol = getattr(state, 'chemical_symbol', None)
+            number = getattr(state, 'atomic_number', None)
+            if symbol is None and number is not None:
+                try:
+                    symbol = chemical_symbols[int(number)]
+                except Exception:
+                    symbol = None
+            labels.append(symbol if symbol is not None else 'X')
+            atomic_numbers.append(int(number) if number is not None else 0)
+
+        n_positions = len(positions)
+        if len(labels) != n_positions:
+            # Keep array lengths consistent with coordinates.
+            if len(labels) < n_positions:
+                missing = n_positions - len(labels)
+                labels.extend(['X'] * missing)
+                atomic_numbers.extend([0] * missing)
+            else:
+                labels = labels[:n_positions]
+                atomic_numbers = atomic_numbers[:n_positions]
+
+        atoms = NOMADAtoms()
+        atoms.positions = positions
+        atoms.labels = labels
+        atoms.atomic_numbers = atomic_numbers
+        atoms.species = atomic_numbers
+        lattice_vectors = getattr(model_system, 'lattice_vectors', None)
+        if lattice_vectors is not None:
+            atoms.lattice_vectors = lattice_vectors
+        pbc = getattr(model_system, 'periodic_boundary_conditions', None)
+        if pbc is not None:
+            atoms.periodic = pbc
+
+        return atoms
+
     # Root/original node: derive atoms/cell directly from representative
     # v2 ModelSystem. Keep indices unset because downstream GUI logic uses
     # "no indices" to identify roots.
@@ -219,7 +264,12 @@ def add_system_info_2(  # noqa: PLR0912
             if system.n_atoms is None and particle_states:
                 system.n_atoms = len(particle_states)
 
-            ase_atoms = parent_system.to_ase_atoms()
+            ase_atoms = None
+            try:
+                ase_atoms = parent_system.to_ase_atoms()
+            except Exception:
+                ase_atoms = None
+
             if ase_atoms is not None:
                 # Populate System.atoms for GUI compatibility (molecular visualizer needs this)
                 # Even though this is runschema which is being phased out, the GUI still depends on it
@@ -227,6 +277,9 @@ def add_system_info_2(  # noqa: PLR0912
 
                 if system.cell is None:
                     system.cell = cell_from_ase_atoms(ase_atoms)
+            elif system.atoms is None:
+                # Fallback for inconsistent v2 geometry payloads where ASE conversion fails.
+                system.atoms = _nomad_atoms_from_model_system(parent_system)
 
             symbols = _particle_symbols(particle_states)
             _populate_chemistry(system, symbols)

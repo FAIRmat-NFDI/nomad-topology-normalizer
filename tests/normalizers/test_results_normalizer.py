@@ -5,7 +5,7 @@ import pytest
 from nomad.datamodel import EntryArchive, EntryMetadata
 from nomad.datamodel.data import ArchiveSection
 from nomad.metainfo import Quantity
-from nomad.datamodel.results import Properties, Results
+from nomad.datamodel.results import DOSElectronic, ElectronicProperties, Properties, Results
 from nomad.units import ureg
 from nomad.utils import get_logger
 from nomad_simulations.schema_packages.atoms_state import AtomsState
@@ -603,7 +603,7 @@ def test_data_schema_uses_latest_output_for_electronic_properties():
     electronic = archive.results.properties.electronic
     assert electronic is not None
     assert len(electronic.band_gap or []) == 1
-    assert electronic.band_gap[0].value.magnitude == pytest.approx(2.5)
+    assert electronic.band_gap[0].value.to('eV').magnitude == pytest.approx(2.5)
     assert len(electronic.band_structure_electronic or []) == 1
 
 
@@ -749,18 +749,84 @@ def test_data_schema_populates_deprecated_dos_with_references():
     normalizer.normalize(archive, LOGGER)
 
     electronic = archive.results.properties.electronic
-    if HAS_RUNSCHEMA:
-        assert electronic is not None
-        assert not electronic.dos_electronic_new
-        assert electronic.dos_electronic
-        dos = electronic.dos_electronic[0]
-        assert dos.energies is not None
-        assert dos.energies.m_is_set
-        assert dos.total
-    else:
-        assert electronic is None or not electronic.dos_electronic_new
-        assert electronic is None or not electronic.dos_electronic
+    assert electronic is not None
+    assert not electronic.dos_electronic_new
+    assert electronic.dos_electronic
+
+    serialized = archive.m_to_dict()
+    dos_sections = (
+        serialized.get('results', {})
+        .get('properties', {})
+        .get('electronic', {})
+        .get('dos_electronic', [])
+    )
+    assert dos_sections
+    dos_ref = dos_sections[0]
+    assert dos_ref.get('energies')
+    assert dos_ref['energies'].startswith('/data/outputs/')
+    assert dos_ref.get('total')
+    assert all(ref.startswith('/data/outputs/') for ref in dos_ref['total'])
     assert len(getattr(archive, 'run', None) or []) == 0
+
+
+def test_data_schema_replaces_malformed_existing_dos_entries():
+    """v2 DOS mapping should replace stale malformed DOS references in results."""
+    archive = EntryArchive(metadata=EntryMetadata())
+    archive.results = Results()
+    archive.results.properties = Properties()
+    archive.results.properties.electronic = archive.results.properties.m_create(
+        ElectronicProperties
+    )
+
+    # Simulate stale malformed entry that can crash GUI (missing energies/total)
+    archive.results.properties.electronic.m_add_sub_section(
+        ElectronicProperties.dos_electronic, DOSElectronic()
+    )
+
+    simulation = Simulation()
+    simulation.program = Program(name='VASP')
+    simulation.model_method.append(DFT())
+
+    model_system = ModelSystem(
+        name='test_system',
+        type='bulk',
+        is_representative=True,
+        positions=np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]]) * ureg.angstrom,
+        n_particles=2,
+    )
+    model_system.particle_states.append(
+        AtomsState(chemical_symbol='Si', atomic_number=14)
+    )
+    model_system.particle_states.append(
+        AtomsState(chemical_symbol='Si', atomic_number=14)
+    )
+    model_system.lattice_vectors = np.eye(3) * 5.43 * ureg.angstrom
+    model_system.periodic_boundary_conditions = [True, True, True]
+    simulation.model_system.append(model_system)
+
+    output = Outputs()
+    dos = ElectronicDensityOfStates(
+        value=np.array([0.1, 0.2, 0.3]) / ureg.eV,
+        spin_channel=0,
+    )
+    dos.energies = Energy2(points=np.array([-1.0, 0.0, 1.0]) * ureg.eV)
+    output.electronic_dos.append(dos)
+    simulation.outputs.append(output)
+    archive.data = simulation
+
+    ResultsNormalizer().normalize(archive, LOGGER)
+
+    serialized = archive.m_to_dict()
+    dos_sections = (
+        serialized.get('results', {})
+        .get('properties', {})
+        .get('electronic', {})
+        .get('dos_electronic', [])
+    )
+    assert dos_sections
+    assert len(dos_sections) == 1
+    assert dos_sections[0].get('energies')
+    assert dos_sections[0].get('total')
 
 
 def test_data_schema_does_not_create_empty_electronic_properties():
