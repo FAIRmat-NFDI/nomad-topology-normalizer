@@ -551,6 +551,7 @@ def test_data_schema_maps_outputs_electronic_properties():
     assert archive.results.properties.structural.radius_of_gyration
     assert archive.results.properties.thermodynamic is not None
     assert archive.results.properties.thermodynamic.trajectory
+    assert len(getattr(archive, 'run', None) or []) == 0
 
 
 def test_data_schema_uses_latest_output_for_electronic_properties():
@@ -606,8 +607,8 @@ def test_data_schema_uses_latest_output_for_electronic_properties():
     assert len(electronic.band_structure_electronic or []) == 1
 
 
-def test_data_schema_band_structure_references_are_not_root_paths():
-    """Band structure segment refs should point to concrete run/calculation paths."""
+def test_data_schema_band_structure_mapping_does_not_create_run_sections():
+    """Band structure mapping from v2 outputs must not create legacy run/calculation."""
     archive = EntryArchive(metadata=EntryMetadata())
     archive.results = Results()
     archive.results.properties = Properties()
@@ -644,6 +645,7 @@ def test_data_schema_band_structure_references_are_not_root_paths():
     normalizer.normalize(archive, LOGGER)
 
     serialized = archive.m_to_dict()
+    assert not serialized.get('run')
     bs = (
         serialized.get('results', {})
         .get('properties', {})
@@ -651,10 +653,8 @@ def test_data_schema_band_structure_references_are_not_root_paths():
         .get('band_structure_electronic', [])
     )
     assert bs
-    segment_refs = bs[0].get('segment', [])
-    assert segment_refs
-    assert all(ref != '/' for ref in segment_refs)
-    assert all(ref.startswith('/run/') for ref in segment_refs)
+    segments = bs[0].get('segment', [])
+    assert segments
 
 
 def test_data_schema_populates_deprecated_dos_mapping():
@@ -705,10 +705,11 @@ def test_data_schema_populates_deprecated_dos_mapping():
     else:
         assert electronic is None or not electronic.dos_electronic_new
         assert electronic is None or not electronic.dos_electronic
+    assert len(getattr(archive, 'run', None) or []) == 0
 
 
 def test_data_schema_populates_deprecated_dos_with_references():
-    """Deprecated dos_electronic should be emitted with valid references."""
+    """Deprecated dos_electronic should be emitted from v2 outputs without run sections."""
     archive = EntryArchive(metadata=EntryMetadata())
     archive.results = Results()
     archive.results.properties = Properties()
@@ -758,6 +759,7 @@ def test_data_schema_populates_deprecated_dos_with_references():
     else:
         assert electronic is None or not electronic.dos_electronic_new
         assert electronic is None or not electronic.dos_electronic
+    assert len(getattr(archive, 'run', None) or []) == 0
 
 
 def test_data_schema_does_not_create_empty_electronic_properties():
@@ -826,7 +828,7 @@ def test_data_schema_logs_unmapped_output_groups(archive_with_data_schema, caplo
 def test_data_schema_skips_dos_cleanly_without_runschema(
     archive_with_data_schema, caplog
 ):
-    """DOS mapping should skip cleanly when runschema-based refs cannot be built."""
+    """DOS mapping should skip cleanly when runschema-based payload cannot be built."""
     output = Outputs()
     dos = ElectronicDensityOfStates(
         value=np.array([0.1, 0.2, 0.3]) / ureg.eV,
@@ -848,7 +850,11 @@ def test_data_schema_skips_dos_cleanly_without_runschema(
         assert not electronic.dos_electronic_new
     else:
         assert electronic is None or not electronic.dos_electronic_new
-        assert 'Skipping DOS compatibility mapping for dos_electronic' in caplog.text
+        assert (
+            'Skipping DOS mapping for results.properties.electronic.dos_electronic'
+            in caplog.text
+        )
+    assert len(getattr(archive_with_data_schema, 'run', None) or []) == 0
 
 
 def test_data_schema_priority_over_run(archive_with_data_schema):
