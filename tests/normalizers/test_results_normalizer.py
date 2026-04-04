@@ -607,6 +607,79 @@ def test_data_schema_uses_latest_output_for_electronic_properties():
     assert len(electronic.band_structure_electronic or []) == 1
 
 
+def test_data_schema_prefers_representative_system_outputs_for_electronic_properties():
+    """Electronic mapping should prefer outputs linked to representative system."""
+    archive = EntryArchive(metadata=EntryMetadata())
+    archive.results = Results()
+    archive.results.properties = Properties()
+
+    simulation = Simulation()
+    simulation.program = Program(name='VASP')
+    simulation.model_method.append(DFT())
+
+    representative_system = ModelSystem(
+        name='rep_system',
+        type='bulk',
+        is_representative=True,
+        positions=np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]]) * ureg.angstrom,
+        n_particles=2,
+    )
+    representative_system.particle_states.append(
+        AtomsState(chemical_symbol='Si', atomic_number=14)
+    )
+    representative_system.particle_states.append(
+        AtomsState(chemical_symbol='Si', atomic_number=14)
+    )
+    representative_system.lattice_vectors = np.eye(3) * 5.43 * ureg.angstrom
+    representative_system.periodic_boundary_conditions = [True, True, True]
+
+    other_system = ModelSystem(
+        name='other_system',
+        type='bulk',
+        is_representative=False,
+        positions=np.array([[0.0, 0.0, 0.0], [2.0, 0.0, 0.0]]) * ureg.angstrom,
+        n_particles=2,
+    )
+    other_system.particle_states.append(AtomsState(chemical_symbol='Ge', atomic_number=32))
+    other_system.particle_states.append(AtomsState(chemical_symbol='Ge', atomic_number=32))
+    other_system.lattice_vectors = np.eye(3) * 5.43 * ureg.angstrom
+    other_system.periodic_boundary_conditions = [True, True, True]
+
+    simulation.model_system.append(representative_system)
+    simulation.model_system.append(other_system)
+
+    # If supported by current schema version, set explicit representative index.
+    if 'representative_index' in simulation.m_def.all_quantities:
+        simulation.representative_index = 0
+
+    output_rep = Outputs()
+    output_rep.model_system_ref = representative_system
+    output_rep.electronic_band_gaps.append(ElectronicBandGap(value=1.5 * ureg.eV))
+    band_structure_rep = ElectronicBandStructure(value=np.array([[1.0, 1.1]]) * ureg.eV)
+    band_structure_rep.k_path = _kline_path()
+    output_rep.electronic_band_structures.append(band_structure_rep)
+    simulation.outputs.append(output_rep)
+
+    output_other = Outputs()
+    output_other.model_system_ref = other_system
+    output_other.electronic_band_gaps.append(ElectronicBandGap(value=2.5 * ureg.eV))
+    band_structure_other = ElectronicBandStructure(value=np.array([[2.0, 2.1]]) * ureg.eV)
+    band_structure_other.k_path = _kline_path()
+    output_other.electronic_band_structures.append(band_structure_other)
+    simulation.outputs.append(output_other)
+
+    archive.data = simulation
+
+    normalizer = ResultsNormalizer()
+    normalizer.normalize(archive, LOGGER)
+
+    electronic = archive.results.properties.electronic
+    assert electronic is not None
+    assert len(electronic.band_gap or []) == 1
+    assert electronic.band_gap[0].value.to('eV').magnitude == pytest.approx(1.5)
+    assert len(electronic.band_structure_electronic or []) == 1
+
+
 def test_data_schema_band_structure_mapping_does_not_create_run_sections():
     """Band structure mapping from v2 outputs must not create legacy run/calculation."""
     archive = EntryArchive(metadata=EntryMetadata())
@@ -827,6 +900,52 @@ def test_data_schema_replaces_malformed_existing_dos_entries():
     assert len(dos_sections) == 1
     assert dos_sections[0].get('energies')
     assert dos_sections[0].get('total')
+
+
+def test_data_schema_drops_malformed_stale_dos_without_new_electronic_payload():
+    """Malformed stale dos_electronic should be removed to avoid GUI crashes."""
+    archive = EntryArchive(metadata=EntryMetadata())
+    archive.results = Results()
+    archive.results.properties = Properties()
+    archive.results.properties.electronic = archive.results.properties.m_create(
+        ElectronicProperties
+    )
+    archive.results.properties.electronic.m_add_sub_section(
+        ElectronicProperties.dos_electronic, DOSElectronic()
+    )
+
+    simulation = Simulation()
+    simulation.program = Program(name='VASP')
+    simulation.model_method.append(DFT())
+
+    model_system = ModelSystem(
+        name='test_system',
+        type='bulk',
+        is_representative=True,
+        positions=np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]]) * ureg.angstrom,
+        n_particles=2,
+    )
+    model_system.particle_states.append(
+        AtomsState(chemical_symbol='Si', atomic_number=14)
+    )
+    model_system.particle_states.append(
+        AtomsState(chemical_symbol='Si', atomic_number=14)
+    )
+    model_system.lattice_vectors = np.eye(3) * 5.43 * ureg.angstrom
+    model_system.periodic_boundary_conditions = [True, True, True]
+    simulation.model_system.append(model_system)
+
+    # No electronic payload in outputs: only thermodynamic quantity.
+    output = Outputs()
+    output.temperatures.append(SimTemperature(value=300 * ureg.kelvin))
+    simulation.outputs.append(output)
+    archive.data = simulation
+
+    ResultsNormalizer().normalize(archive, LOGGER)
+
+    electronic = archive.results.properties.electronic
+    if electronic is not None:
+        assert not (electronic.dos_electronic or [])
 
 
 def test_data_schema_does_not_create_empty_electronic_properties():

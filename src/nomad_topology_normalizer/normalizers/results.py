@@ -973,6 +973,18 @@ class ResultsNormalizerBase:
 
     def _normalize_outputs_with_data_schema(self, archive: EntryArchive) -> None:
         """Map v2 Simulation.outputs into results.properties (minimal slice)."""
+
+        def _is_valid_legacy_dos_entry(entry) -> bool:
+            if entry is None:
+                return False
+            energies = getattr(entry, 'energies', None)
+            totals = getattr(entry, 'total', None)
+            if energies in (None, ''):
+                return False
+            if not totals:
+                return False
+            return True
+
         data = getattr(archive, 'data', None)
         outputs = getattr(data, 'outputs', None) if data else None
         if not outputs:
@@ -984,6 +996,16 @@ class ResultsNormalizerBase:
         properties = archive.results.properties
         if properties is None:
             properties = archive.results.m_create(Properties)
+        else:
+            # Guard against malformed stale deprecated DOS entries that can make
+            # GUI DOS resolver crash (reference.energies undefined).
+            electronic_existing = properties.electronic
+            if electronic_existing is not None:
+                existing_dos = getattr(electronic_existing, 'dos_electronic', None) or []
+                if existing_dos:
+                    electronic_existing.dos_electronic = [
+                        dos for dos in existing_dos if _is_valid_legacy_dos_entry(dos)
+                    ]
 
         # Keep legacy-equivalent behavior: electronic properties should represent
         # the latest relevant output payload, while trajectory/spectra can aggregate.
@@ -991,12 +1013,28 @@ class ResultsNormalizerBase:
         latest_dos_sections: list[DOSElectronic] = []
         latest_band_structures: list[BandStructureElectronic] = []
         latest_greens_functions: list[GreensFunctionsElectronic] = []
+        best_electronic_score = -1
         spectra_sections: list[Spectra] = []
         rg_sections: list[RadiusOfGyration] = []
         temperature_series: list[float] = []
         temperature_time: list[float] = []
         potential_energy_series: list[float] = []
         potential_energy_time: list[float] = []
+
+        representative_system = None
+        model_systems = getattr(data, 'model_system', None) or []
+        representative_index = getattr(data, 'representative_index', None)
+        if (
+            isinstance(representative_index, int)
+            and representative_index >= 0
+            and representative_index < len(model_systems)
+        ):
+            representative_system = model_systems[representative_index]
+        elif model_systems:
+            representative_system = next(
+                (system for system in model_systems if getattr(system, 'is_representative', False)),
+                None,
+            )
 
         for index, output in enumerate(outputs):
             output_band_gaps: list[BandGap] = []
@@ -1047,10 +1085,19 @@ class ResultsNormalizerBase:
                 or output_band_structures
                 or output_greens_functions
             ):
-                latest_band_gaps = output_band_gaps
-                latest_dos_sections = output_dos_sections
-                latest_band_structures = output_band_structures
-                latest_greens_functions = output_greens_functions
+                output_system_ref = getattr(output, 'model_system_ref', None)
+                score = (
+                    1
+                    if representative_system is not None
+                    and output_system_ref is representative_system
+                    else 0
+                )
+                if score > best_electronic_score or score == best_electronic_score:
+                    best_electronic_score = score
+                    latest_band_gaps = output_band_gaps
+                    latest_dos_sections = output_dos_sections
+                    latest_band_structures = output_band_structures
+                    latest_greens_functions = output_greens_functions
 
             for absorption in getattr(output, 'absorption_spectra', []) or []:
                 mapped_spectrum = self._map_spectrum(absorption, 'unavailable')
