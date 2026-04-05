@@ -980,14 +980,25 @@ class ResultsNormalizerBase:
             if isinstance(entry, dict):
                 energies = entry.get('energies')
                 totals = entry.get('total')
-            else:
+                if not isinstance(energies, str) or not energies:
+                    return False
+                if not isinstance(totals, (list, tuple)) or not totals:
+                    return False
+                if any(not isinstance(total_ref, str) or not total_ref for total_ref in totals):
+                    return False
+                return True
+
+            # Accessing deprecated DOS refs can trigger proxy resolution; if that
+            # fails we treat the entry as malformed instead of crashing normalization.
+            try:
                 energies = getattr(entry, 'energies', None)
                 totals = getattr(entry, 'total', None)
-            if not isinstance(energies, str) or not energies:
+            except Exception:
                 return False
-            if not isinstance(totals, (list, tuple)) or not totals:
+
+            if energies in (None, ''):
                 return False
-            if any(not isinstance(total_ref, str) or not total_ref for total_ref in totals):
+            if not totals:
                 return False
             return True
 
@@ -1166,9 +1177,6 @@ class ResultsNormalizerBase:
             or latest_greens_functions
         )
         if has_electronic_payload:
-            latest_dos_sections = [
-                dos for dos in latest_dos_sections if _is_valid_legacy_dos_entry(dos)
-            ]
             electronic = properties.electronic
             if electronic is None:
                 electronic = properties.m_create(ElectronicProperties)
