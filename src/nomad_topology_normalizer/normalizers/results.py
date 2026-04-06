@@ -613,7 +613,31 @@ class ResultsNormalizerBase:
             'total_ref': f'/data/outputs/{output_index}/electronic_dos/{dos_index}',
             'spin_channel': spin_ch,
             'has_projected': has_projected,
+            'energies_points': energies_points,
+            'values': values,
         }
+
+    def _ensure_legacy_run_calculation(self, archive: EntryArchive):
+        """Ensure archive.run[0].calculation[0] exists for DOS compatibility payloads."""
+        if not runschema:
+            return None
+
+        run = None
+        runs = getattr(archive, 'run', None)
+        if runs and len(runs) > 0:
+            run = runs[0]
+        else:
+            run = runschema.run.Run()
+            archive.run.append(run)
+
+        calculations = getattr(run, 'calculation', None)
+        if calculations and len(calculations) > 0:
+            calculation = calculations[0]
+        else:
+            calculation = runschema.calculation.Calculation()
+            run.calculation.append(calculation)
+
+        return calculation
 
     def _map_band_structure(self, band_structure_section) -> BandStructureElectronic | None:
         """Map one ElectronicBandStructure into results BandStructureElectronic."""
@@ -1028,6 +1052,7 @@ class ResultsNormalizerBase:
         # the latest relevant output payload, while trajectory/spectra can aggregate.
         latest_band_gaps: list[BandGap] = []
         latest_dos_sections: list[DOSElectronic] = []
+        latest_dos_payload: list[dict] = []
         latest_band_structures: list[BandStructureElectronic] = []
         latest_greens_functions: list[GreensFunctionsElectronic] = []
         best_electronic_score = -1
@@ -1113,6 +1138,7 @@ class ResultsNormalizerBase:
                     best_electronic_score = score
                     latest_band_gaps = output_band_gaps
                     latest_dos_sections = output_dos_sections
+                    latest_dos_payload = dos_data_sections
                     latest_band_structures = output_band_structures
                     latest_greens_functions = output_greens_functions
 
@@ -1176,6 +1202,31 @@ class ResultsNormalizerBase:
             or latest_band_structures
             or latest_greens_functions
         )
+
+        # Prefer run/calculation DOS compatibility paths when runschema is available,
+        # so legacy GUI resolvers can follow runschema-typed references robustly.
+        if runschema and latest_dos_sections and latest_dos_payload:
+            calculation = self._ensure_legacy_run_calculation(archive)
+            if calculation is not None:
+                calculation.dos_electronic = []
+                run_total_refs: list[str] = []
+                for idx, dos_entry in enumerate(latest_dos_payload):
+                    legacy_dos = runschema.calculation.Dos()
+                    legacy_dos.energies = dos_entry['energies_points']
+
+                    legacy_total = runschema.calculation.DosValues()
+                    legacy_total.value = dos_entry['values']
+                    legacy_total.spin = int(dos_entry.get('spin_channel', 0) or 0)
+                    legacy_dos.total.append(legacy_total)
+
+                    calculation.dos_electronic.append(legacy_dos)
+                    run_total_refs.append(
+                        f'/run/0/calculation/0/dos_electronic/{idx}/total/0'
+                    )
+
+                latest_dos_sections[0].energies = '/run/0/calculation/0/dos_electronic/0/energies'
+                latest_dos_sections[0].total = run_total_refs
+
         if has_electronic_payload:
             electronic = properties.electronic
             if electronic is None:

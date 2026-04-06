@@ -551,7 +551,10 @@ def test_data_schema_maps_outputs_electronic_properties():
     assert archive.results.properties.structural.radius_of_gyration
     assert archive.results.properties.thermodynamic is not None
     assert archive.results.properties.thermodynamic.trajectory
-    assert len(getattr(archive, 'run', None) or []) == 0
+    if HAS_RUNSCHEMA:
+        assert len(getattr(archive, 'run', None) or []) == 1
+    else:
+        assert len(getattr(archive, 'run', None) or []) == 0
 
 
 def test_data_schema_uses_latest_output_for_electronic_properties():
@@ -775,14 +778,17 @@ def test_data_schema_populates_deprecated_dos_mapping():
         assert electronic is not None
         assert not electronic.dos_electronic_new
         assert electronic.dos_electronic
+        assert len(getattr(archive, 'run', None) or []) == 1
+        assert len(getattr(archive.run[0], 'calculation', None) or []) == 1
+        assert len(getattr(archive.run[0].calculation[0], 'dos_electronic', None) or []) == 1
     else:
         assert electronic is None or not electronic.dos_electronic_new
         assert electronic is None or not electronic.dos_electronic
-    assert len(getattr(archive, 'run', None) or []) == 0
+        assert len(getattr(archive, 'run', None) or []) == 0
 
 
 def test_data_schema_populates_deprecated_dos_with_references():
-    """Deprecated dos_electronic should be emitted from v2 outputs without run sections."""
+    """Deprecated dos_electronic should point to run/calculation compatibility refs."""
     archive = EntryArchive(metadata=EntryMetadata())
     archive.results = Results()
     archive.results.properties = Properties()
@@ -836,10 +842,10 @@ def test_data_schema_populates_deprecated_dos_with_references():
     assert dos_sections
     dos_ref = dos_sections[0]
     assert dos_ref.get('energies')
-    assert dos_ref['energies'].startswith('/data/outputs/')
+    assert dos_ref['energies'].startswith('/run/0/calculation/0/dos_electronic/')
     assert dos_ref.get('total')
-    assert all(ref.startswith('/data/outputs/') for ref in dos_ref['total'])
-    assert len(getattr(archive, 'run', None) or []) == 0
+    assert all(ref.startswith('/run/0/calculation/0/dos_electronic/') for ref in dos_ref['total'])
+    assert len(getattr(archive, 'run', None) or []) == 1
 
 
 def test_data_schema_replaces_malformed_existing_dos_entries():
@@ -1034,13 +1040,14 @@ def test_data_schema_skips_dos_cleanly_without_runschema(
         assert electronic is not None
         assert electronic.dos_electronic
         assert not electronic.dos_electronic_new
+        assert len(getattr(archive_with_data_schema, 'run', None) or []) == 1
     else:
         assert electronic is None or not electronic.dos_electronic_new
         assert (
             'Skipping DOS mapping for results.properties.electronic.dos_electronic'
             in caplog.text
         )
-    assert len(getattr(archive_with_data_schema, 'run', None) or []) == 0
+        assert len(getattr(archive_with_data_schema, 'run', None) or []) == 0
 
 
 def test_data_schema_priority_over_run(archive_with_data_schema):
