@@ -624,14 +624,14 @@ class ResultsNormalizerBase:
             return None
 
         run = None
-        runs = getattr(archive, 'run', None)
+        runs = archive.run
         if runs and len(runs) > 0:
             run = runs[0]
         else:
             run = runschema.run.Run()
             archive.run.append(run)
 
-        calculations = getattr(run, 'calculation', None)
+        calculations = run.calculation
         if calculations and len(calculations) > 0:
             calculation = calculations[0]
         else:
@@ -642,7 +642,7 @@ class ResultsNormalizerBase:
 
     def _map_band_structure(self, band_structure_section) -> BandStructureElectronic | None:
         """Map one ElectronicBandStructure into results BandStructureElectronic."""
-        values = getattr(band_structure_section, 'value', None)
+        values = band_structure_section.value
         if values is None:
             return None
         try:
@@ -658,10 +658,14 @@ class ResultsNormalizerBase:
             energies_array = energies_array[np.newaxis, :, np.newaxis]
         elif energies_array.ndim == 2:
             energies_array = energies_array[np.newaxis, :, :]
-        legacy_segment = BandEnergies()
+        segment_cls = BandEnergies
+        if runschema and hasattr(runschema, 'calculation'):
+            segment_cls = runschema.calculation.BandEnergies
+        legacy_segment = segment_cls()
         legacy_segment.energies = energies_array * values.u
 
-        k_points = getattr(getattr(band_structure_section, 'k_path', None), 'points', None)
+        k_path = band_structure_section.k_path
+        k_points = k_path.points if k_path is not None else None
         if not valid_array(k_points):
             # Fallback for parsers that only store band-path information in
             # model method numerical settings.
@@ -673,7 +677,16 @@ class ResultsNormalizerBase:
             except Exception:
                 numerical_settings = None
             for setting in numerical_settings or []:
-                k_points = getattr(getattr(setting, 'k_line_path', None), 'points', None)
+                k_line_path = setting.k_line_path
+                k_points = k_line_path.points if k_line_path is not None else None
+                if not valid_array(k_points):
+                    # Some parsers expose only vertex path values without the
+                    # expanded line-point list.
+                    k_points = (
+                        k_line_path.high_symmetry_path_values
+                        if k_line_path is not None
+                        else None
+                    )
                 if valid_array(k_points):
                     break
         if not valid_array(k_points):
@@ -681,7 +694,7 @@ class ResultsNormalizerBase:
             return None
         legacy_segment.kpoints = k_points
 
-        reciprocal_cell = getattr(band_structure_section, 'reciprocal_cell', None)
+        reciprocal_cell = band_structure_section.reciprocal_cell
 
         band_structure = BandStructureElectronic()
         band_structure.segment = [legacy_segment]

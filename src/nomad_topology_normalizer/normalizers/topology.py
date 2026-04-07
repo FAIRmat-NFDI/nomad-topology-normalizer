@@ -233,7 +233,7 @@ def add_system_info_2(  # noqa: PLR0912
             system.elemental_composition = formula.elemental_composition()
 
     def _nomad_atoms_from_model_system(model_system) -> NOMADAtoms | None:
-        positions = getattr(model_system, 'positions', None)
+        positions = model_system.positions
         if positions is None:
             return None
 
@@ -262,12 +262,12 @@ def add_system_info_2(  # noqa: PLR0912
         if pos_arr is None:
             return None
 
-        particle_states = getattr(model_system, 'particle_states', None) or []
+        particle_states = model_system.particle_states or []
         labels = []
         atomic_numbers = []
         for state in particle_states:
-            symbol = getattr(state, 'chemical_symbol', None)
-            number = getattr(state, 'atomic_number', None)
+            symbol = state.chemical_symbol
+            number = state.atomic_number
             normalized_number = _normalize_atomic_number(number, symbol)
             if symbol is None and normalized_number is not None:
                 symbol = chemical_symbols[normalized_number]
@@ -294,11 +294,11 @@ def add_system_info_2(  # noqa: PLR0912
         atoms.labels = labels
         atoms.atomic_numbers = atomic_numbers
         atoms.species = atomic_numbers
-        lattice_vectors = getattr(model_system, 'lattice_vectors', None)
+        lattice_vectors = model_system.lattice_vectors
         lattice_arr = _to_meter_array(lattice_vectors)
         if lattice_arr is not None:
             atoms.lattice_vectors = lattice_arr * ureg.meter
-        pbc = getattr(model_system, 'periodic_boundary_conditions', None)
+        pbc = model_system.periodic_boundary_conditions
         if pbc is not None:
             pbc_arr = np.asarray(pbc, dtype=bool).reshape(-1)
             if pbc_arr.size >= 3:
@@ -453,9 +453,9 @@ class TopologyNormalizer(Normalizer):
         """Get symmetry and conv_atoms from results if available."""
         try:
             if archive.results and archive.results.properties:
-                structures = getattr(archive.results.properties, 'structures', None)
+                structures = archive.results.properties.structures
                 if structures:
-                    self.repr_symmetry = getattr(structures, 'structure_original', None)
+                    self.repr_symmetry = structures.structure_original
         except Exception:
             pass
 
@@ -683,7 +683,7 @@ class TopologyNormalizer(Normalizer):
 
         # Create topology for the original system
         topology: dict[str, System] = {}
-        particles = getattr(self.repr_system, 'particle_states', None)
+        particles = self.repr_system.particle_states
         original = get_topology_original(particles, self.entry_archive)
         # Keep atoms_ref for compatibility with old topology_matid code
         add_system(original, topology)
@@ -769,39 +769,37 @@ class TopologyNormalizer(Normalizer):
     def topology_data(self, section: SystemV2, path: str = '') -> list[System]:
         topology: dict[str, System] = {}
         try:
-            particles = getattr(self.repr_system, 'particle_states', None)
+            particles = self.repr_system.particle_states
         except Exception:
             particles = None
         original = get_topology_original(particles, self.entry_archive)
         add_system(original, topology)
         add_system_info_2(original, topology, parent_system=self.repr_system)
-        root_id = path or getattr(section, 'name', None) or section.m_def.name
+        root_id = path or section.name or section.m_def.name
         root = System(
             method='parser',
             label=root_id,
             description='Imported from v2.System',
         )
-        v2_props = getattr(section, 'subsystem_properties', None) or getattr(
-            section, 'system_properties', None
-        )
+        v2_props = section.subsystem_properties or section.system_properties
         copy_properties_to_system(root, v2_props)
         add_system(root, topology, original)
         add_system_info_2(root, topology, parent_system=self.repr_system)
 
         def recurse(v2sec: SystemV2, parent_sys: System, cur_path: str):
-            for proxy in getattr(v2sec, 'sub_systems', []):
+            for proxy in v2sec.sub_systems or []:
                 sub = getattr(proxy, 'value', proxy)
                 if not isinstance(sub, SubSystemV2):
                     continue
 
-                child_id = f'{cur_path}/{getattr(sub, "name", "")}'
+                child_id = f'{cur_path}/{sub.name}'
                 child = System(
                     method='parser',
-                    label=getattr(sub, 'name', None) or 'subsystem',
+                    label=sub.name or 'subsystem',
                     description='Imported from v2.System',
                 )
 
-                sub_props = getattr(sub, 'subsystem_properties', None)
+                sub_props = sub.subsystem_properties
                 copy_properties_to_system(child, sub_props)
                 add_system(child, topology, parent_sys)
                 add_system_info_2(child, topology, parent_system=self.repr_system)
