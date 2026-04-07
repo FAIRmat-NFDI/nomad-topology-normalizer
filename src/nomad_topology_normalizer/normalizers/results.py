@@ -253,11 +253,14 @@ class ResultsNormalizerBase:
         Returns SystemV2 instance if found, True if indicated by model_system but no
         instance found, or False.
         """
-        if not hasattr(archive, 'data') or archive.data is None:
+        if archive.data is None:
             return False
 
         # Check if data has model_system (Simulation-style v2 schema indicator)
-        has_model_system = hasattr(archive.data, 'model_system')
+        try:
+            has_model_system = archive.data.model_system is not None
+        except Exception:
+            has_model_system = False
 
         # Verify it's using basesections.v2 by checking the class origin
         from nomad.datamodel.metainfo.basesections.v2 import System as SystemV2
@@ -347,12 +350,12 @@ class ResultsNormalizerBase:
             return rung_to_value.get(highest)
 
         def _basis_set_type_from_model_method(model_method, program_name: str | None):
-            settings = getattr(model_method, 'numerical_settings', None) or []
+            settings = model_method.numerical_settings or []
             for setting in settings:
                 setting_name = getattr(getattr(setting, 'm_def', None), 'name', None)
                 if setting_name != 'BasisSetContainer':
                     continue
-                components = getattr(setting, 'basis_set_components', None) or []
+                components = setting.basis_set_components or []
                 component_names = [
                     getattr(getattr(comp, 'm_def', None), 'name', '')
                     for comp in components
@@ -369,7 +372,7 @@ class ResultsNormalizerBase:
         def _core_electron_treatment_from_model_method(
             model_method, program_name: str | None
         ):
-            settings = getattr(model_method, 'numerical_settings', None) or []
+            settings = model_method.numerical_settings or []
             for setting in settings:
                 setting_name = getattr(getattr(setting, 'm_def', None), 'name', None)
                 if setting_name == 'Pseudopotential':
@@ -386,13 +389,13 @@ class ResultsNormalizerBase:
             return None
 
         def _scf_threshold_from_model_method(model_method):
-            settings = getattr(model_method, 'numerical_settings', None) or []
+            settings = model_method.numerical_settings or []
             for setting in settings:
                 setting_name = getattr(getattr(setting, 'm_def', None), 'name', None)
                 if setting_name == 'SelfConsistency':
-                    threshold_change = getattr(setting, 'threshold_change', None)
+                    threshold_change = setting.threshold_change
                     if threshold_change is not None:
-                        threshold_unit = getattr(setting, 'threshold_change_unit', None)
+                        threshold_unit = setting.threshold_change_unit
                         if threshold_unit:
                             try:
                                 return threshold_change * ureg(threshold_unit)
@@ -405,11 +408,11 @@ class ResultsNormalizerBase:
             model_method, simulation_method: DFT, program_name: str | None
         ) -> None:
             # Keep legacy-equivalent transfer only.
-            is_spin_polarized = getattr(model_method, 'is_spin_polarized', None)
+            is_spin_polarized = model_method.is_spin_polarized
             if is_spin_polarized is not None:
                 simulation_method.spin_polarized = bool(is_spin_polarized)
 
-            jacobs_ladder = getattr(model_method, 'jacobs_ladder', None)
+            jacobs_ladder = model_method.jacobs_ladder
             xc_names = _xc_names_from_model_method(model_method)
             if xc_names:
                 simulation_method.xc_functional_names = xc_names
@@ -442,7 +445,7 @@ class ResultsNormalizerBase:
             if scf_threshold is not None:
                 simulation_method.scf_threshold_energy_change = scf_threshold
 
-            xc = getattr(model_method, 'xc', None)
+            xc = model_method.xc
             exact_exchange = getattr(xc, 'global_exact_exchange', None) if xc else None
             if exact_exchange is not None:
                 simulation_method.exact_exchange_mixing_factor = exact_exchange
@@ -452,18 +455,21 @@ class ResultsNormalizerBase:
         ) -> None:
             if dft_method is None:
                 return
-            dft_basis = getattr(dft_method, 'basis_set_type', None)
+            dft_basis = dft_method.basis_set_type
             if dft_basis in _enum_values(type(target_method), 'basis_set_type'):
                 target_method.basis_set_type = dft_basis
-            dft_names = getattr(dft_method, 'xc_functional_names', None)
+            dft_names = dft_method.xc_functional_names
             if dft_names:
                 target_method.starting_point_names = dft_names
-            dft_xc_type = getattr(dft_method, 'xc_functional_type', None)
+            dft_xc_type = dft_method.xc_functional_type
             if dft_xc_type in _enum_values(type(target_method), 'starting_point_type'):
                 target_method.starting_point_type = dft_xc_type
 
-        data = getattr(archive, 'data', None)
-        model_methods = getattr(data, 'model_method', None) if data else None
+        data = archive.data
+        try:
+            model_methods = data.model_method if data else None
+        except Exception:
+            model_methods = None
         if not model_methods:
             return
 
@@ -483,13 +489,14 @@ class ResultsNormalizerBase:
         if simulation is None:
             simulation = method.m_create(Simulation)
 
-        program = getattr(data, 'program', None)
+        try:
+            program = data.program
+        except Exception:
+            program = None
         if program:
-            simulation.program_name = getattr(program, 'name', None)
-            simulation.program_version = getattr(program, 'version', None)
-            simulation.program_version_internal = getattr(
-                program, 'version_internal', None
-            )
+            simulation.program_name = program.name
+            simulation.program_version = program.version
+            simulation.program_version_internal = program.version_internal
 
         method_name_enum = set(Method.m_def.all_quantities['method_name'].type)
         method_tokens = []
@@ -498,7 +505,7 @@ class ResultsNormalizerBase:
             section_method_type = getattr(
                 getattr(model_method, 'm_def', None), 'name', None
             )
-            name_method_type = getattr(model_method, 'name', None)
+            name_method_type = model_method.name
             method_type = section_method_type
             if method_type in tb_method_subtypes:
                 method_type = 'TB'
@@ -521,7 +528,7 @@ class ResultsNormalizerBase:
             elif method_type == 'TB':
                 if simulation.tb is None:
                     simulation.tb = TB()
-                tb_type = getattr(model_method, 'type', None)
+                tb_type = model_method.type
                 tb_type_enum = _enum_values(TB, 'type')
                 if (
                     tb_type not in tb_type_enum
@@ -533,11 +540,11 @@ class ResultsNormalizerBase:
                 _set_if_enum(
                     simulation.tb,
                     'localization_type',
-                    getattr(model_method, 'localization_type', None),
+                    model_method.localization_type,
                 )
             elif method_type == 'GW' and simulation.gw is None:
                 simulation.gw = GW()
-                _set_if_enum(simulation.gw, 'type', getattr(model_method, 'type', None))
+                _set_if_enum(simulation.gw, 'type', model_method.type)
                 gw_basis = _basis_set_type_from_model_method(
                     model_method, simulation.program_name
                 )
@@ -545,10 +552,10 @@ class ResultsNormalizerBase:
             elif method_type == 'BSE' and simulation.bse is None:
                 simulation.bse = BSE()
                 _set_if_enum(
-                    simulation.bse, 'type', getattr(model_method, 'type', None)
+                    simulation.bse, 'type', model_method.type
                 )
                 _set_if_enum(
-                    simulation.bse, 'solver', getattr(model_method, 'solver', None)
+                    simulation.bse, 'solver', model_method.solver
                 )
                 bse_basis = _basis_set_type_from_model_method(
                     model_method, simulation.program_name
@@ -559,14 +566,14 @@ class ResultsNormalizerBase:
                 _set_if_enum(
                     simulation.dmft,
                     'impurity_solver_type',
-                    getattr(model_method, 'impurity_solver', None),
+                    model_method.impurity_solver,
                 )
                 _set_if_enum(
                     simulation.dmft,
                     'magnetic_state',
-                    getattr(model_method, 'magnetic_state', None),
+                    model_method.magnetic_state,
                 )
-                if getattr(model_method, 'inverse_temperature', None) is not None:
+                if model_method.inverse_temperature is not None:
                     simulation.dmft.inverse_temperature = (
                         model_method.inverse_temperature
                     )
@@ -595,10 +602,9 @@ class ResultsNormalizerBase:
 
     def _map_dos_data(self, dos_section, output_index: int, dos_index: int) -> dict | None:
         """Map one ElectronicDensityOfStates into DOSElectronic-compatible refs."""
-        energies_points = getattr(
-            getattr(dos_section, 'energies', None), 'points', None
-        )
-        values = getattr(dos_section, 'value', None)
+        energies = dos_section.energies
+        energies_points = energies.points if energies is not None else None
+        values = dos_section.value
         if not valid_array(energies_points) or values is None:
             return None
         try:
@@ -607,8 +613,8 @@ class ResultsNormalizerBase:
         except Exception:
             return None
 
-        spin_ch = getattr(dos_section, 'spin_channel', 0)
-        has_projected = bool(getattr(dos_section, 'projected_dos', None))
+        spin_ch = dos_section.spin_channel or 0
+        has_projected = bool(dos_section.projected_dos)
         return {
             'energies_ref': f'/data/outputs/{output_index}/electronic_dos/{dos_index}/energies/points',
             'total_ref': f'/data/outputs/{output_index}/electronic_dos/{dos_index}',
@@ -742,11 +748,11 @@ class ResultsNormalizerBase:
         legacy_gf = gf_cls()
         mapped = False
 
-        for greens in getattr(output_section, 'electronic_greens_functions', []) or []:
+        for greens in output_section.electronic_greens_functions or []:
             if (
-                getattr(greens, 'imaginary_time', None) is not None
+                greens.imaginary_time is not None
                 and valid_array(greens.imaginary_time.points)
-                and getattr(greens, 'value', None) is not None
+                and greens.value is not None
             ):
                 mapped = (
                     _safe_set(legacy_gf, 'tau', greens.imaginary_time.points) or mapped
@@ -755,9 +761,9 @@ class ResultsNormalizerBase:
                     _safe_set(legacy_gf, 'greens_function_tau', greens.value) or mapped
                 )
             if (
-                getattr(greens, 'matsubara_frequency', None) is not None
+                greens.matsubara_frequency is not None
                 and valid_array(greens.matsubara_frequency.points)
-                and getattr(greens, 'value', None) is not None
+                and greens.value is not None
             ):
                 matsubara_points = greens.matsubara_frequency.points
                 if np.iscomplexobj(np.array(matsubara_points.magnitude)):
@@ -781,9 +787,9 @@ class ResultsNormalizerBase:
                     or mapped
                 )
             if (
-                getattr(greens, 'real_frequency', None) is not None
+                greens.real_frequency is not None
                 and valid_array(greens.real_frequency.points)
-                and getattr(greens, 'value', None) is not None
+                and greens.value is not None
             ):
                 mapped = (
                     _safe_set(legacy_gf, 'frequencies', greens.real_frequency.points)
@@ -801,13 +807,11 @@ class ResultsNormalizerBase:
                     or mapped
                 )
 
-        for self_energy in (
-            getattr(output_section, 'electronic_self_energies', []) or []
-        ):
+        for self_energy in (output_section.electronic_self_energies or []):
             if (
-                getattr(self_energy, 'matsubara_frequency', None) is not None
+                self_energy.matsubara_frequency is not None
                 and valid_array(self_energy.matsubara_frequency.points)
-                and getattr(self_energy, 'value', None) is not None
+                and self_energy.value is not None
             ):
                 matsubara_points = self_energy.matsubara_frequency.points
                 if np.iscomplexobj(np.array(matsubara_points.magnitude)):
@@ -832,9 +836,9 @@ class ResultsNormalizerBase:
                     or mapped
                 )
             if (
-                getattr(self_energy, 'real_frequency', None) is not None
+                self_energy.real_frequency is not None
                 and valid_array(self_energy.real_frequency.points)
-                and getattr(self_energy, 'value', None) is not None
+                and self_energy.value is not None
             ):
                 mapped = (
                     _safe_set(
@@ -854,13 +858,11 @@ class ResultsNormalizerBase:
                     or mapped
                 )
 
-        for hybridization in (
-            getattr(output_section, 'hybridization_functions', []) or []
-        ):
+        for hybridization in (output_section.hybridization_functions or []):
             if (
-                getattr(hybridization, 'matsubara_frequency', None) is not None
+                hybridization.matsubara_frequency is not None
                 and valid_array(hybridization.matsubara_frequency.points)
-                and getattr(hybridization, 'value', None) is not None
+                and hybridization.value is not None
             ):
                 matsubara_points = hybridization.matsubara_frequency.points
                 if np.iscomplexobj(np.array(matsubara_points.magnitude)):
@@ -886,9 +888,9 @@ class ResultsNormalizerBase:
                         or mapped
                     )
             if (
-                getattr(hybridization, 'real_frequency', None) is not None
+                hybridization.real_frequency is not None
                 and valid_array(hybridization.real_frequency.points)
-                and getattr(hybridization, 'value', None) is not None
+                and hybridization.value is not None
             ):
                 mapped = (
                     _safe_set(
@@ -908,17 +910,17 @@ class ResultsNormalizerBase:
                     or mapped
                 )
 
-        for qp_weight in getattr(output_section, 'quasiparticle_weights', []) or []:
-            if getattr(qp_weight, 'value', None) is not None and valid_array(
+        for qp_weight in output_section.quasiparticle_weights or []:
+            if qp_weight.value is not None and valid_array(
                 np.array(qp_weight.value)
             ):
                 legacy_gf.quasiparticle_weights = qp_weight.value
                 mapped = True
 
-        chemical_potentials = getattr(output_section, 'chemical_potentials', []) or []
+        chemical_potentials = output_section.chemical_potentials or []
         if (
             chemical_potentials
-            and getattr(chemical_potentials[0], 'value', None) is not None
+            and chemical_potentials[0].value is not None
         ):
             legacy_gf.chemical_potential = chemical_potentials[0].value
             mapped = True
@@ -954,8 +956,9 @@ class ResultsNormalizerBase:
         return greens_functions
 
     def _map_spectrum(self, spectrum_section, spectrum_type: str) -> Spectra | None:
-        energies = getattr(getattr(spectrum_section, 'energies', None), 'points', None)
-        intensities = getattr(spectrum_section, 'value', None)
+        energies_section = spectrum_section.energies
+        energies = energies_section.points if energies_section is not None else None
+        intensities = spectrum_section.value
         if intensities is None:
             return None
         intensities_array, intensities_units = self._array_and_units(
@@ -976,12 +979,12 @@ class ResultsNormalizerBase:
         return spectra
 
     def _map_radius_of_gyration(self, rg_section) -> RadiusOfGyration | None:
-        value = getattr(rg_section, 'value', None)
+        value = rg_section.value
         if value is None:
             return None
         rg = RadiusOfGyration()
         rg.value = value
-        rg.label = getattr(rg_section, 'name', None) or 'radius_of_gyration'
+        rg.label = rg_section.name or 'radius_of_gyration'
         return rg
 
     @staticmethod
@@ -1050,13 +1053,16 @@ class ResultsNormalizerBase:
                 return False
             return True
 
-        data = getattr(archive, 'data', None)
-        outputs = getattr(data, 'outputs', None) if data else None
+        data = archive.data
+        try:
+            outputs = data.outputs if data else None
+        except Exception:
+            outputs = None
         if not outputs:
             return
 
         had_dos_input = any(
-            len(getattr(output, 'electronic_dos', []) or []) > 0 for output in outputs
+            len(output.electronic_dos or []) > 0 for output in outputs
         )
         properties = archive.results.properties
         if properties is None:
@@ -1066,7 +1072,7 @@ class ResultsNormalizerBase:
             # GUI DOS resolver crash (reference.energies undefined).
             electronic_existing = properties.electronic
             if electronic_existing is not None:
-                existing_dos = getattr(electronic_existing, 'dos_electronic', None) or []
+                existing_dos = electronic_existing.dos_electronic or []
                 if existing_dos:
                     electronic_existing.dos_electronic = [
                         dos for dos in existing_dos if _is_valid_legacy_dos_entry(dos)
@@ -1088,8 +1094,17 @@ class ResultsNormalizerBase:
         potential_energy_time: list[float] = []
 
         representative_system = None
-        model_systems = getattr(data, 'model_system', None) or []
-        representative_index = getattr(data, 'representative_index', None)
+        try:
+            model_systems = data.model_system or []
+        except Exception:
+            model_systems = []
+        try:
+            representative_index = data.representative_index
+        except Exception:
+            try:
+                representative_index = data.representative_system_index
+            except Exception:
+                representative_index = None
         if (
             isinstance(representative_index, int)
             and representative_index >= 0
@@ -1098,7 +1113,7 @@ class ResultsNormalizerBase:
             representative_system = model_systems[representative_index]
         elif model_systems:
             representative_system = next(
-                (system for system in model_systems if getattr(system, 'is_representative', False)),
+                (system for system in model_systems if system.is_representative),
                 None,
             )
 
@@ -1108,17 +1123,17 @@ class ResultsNormalizerBase:
             output_band_structures: list[BandStructureElectronic] = []
             output_greens_functions: list[GreensFunctionsElectronic] = []
 
-            for bg in getattr(output, 'electronic_band_gaps', []) or []:
-                if getattr(bg, 'value', None) is None:
+            for bg in output.electronic_band_gaps or []:
+                if bg.value is None:
                     continue
                 bg_result = BandGap()
                 bg_result.value = bg.value
-                bg_result.type = getattr(bg, 'type', None)
+                bg_result.type = bg.type
                 output_band_gaps.append(bg_result)
 
             dos_data_sections: list[dict] = []
             has_projected = False
-            for dos_index, dos in enumerate(getattr(output, 'electronic_dos', []) or []):
+            for dos_index, dos in enumerate(output.electronic_dos or []):
                 mapped = self._map_dos_data(dos, index, dos_index)
                 if mapped is None:
                     continue
@@ -1134,9 +1149,7 @@ class ResultsNormalizerBase:
                     dos_result.spin_polarized = len(dos_data_sections) == 2
                     output_dos_sections.append(dos_result)
 
-            for band_structure in (
-                getattr(output, 'electronic_band_structures', []) or []
-            ):
+            for band_structure in (output.electronic_band_structures or []):
                 mapped_band_structure = self._map_band_structure(band_structure)
                 if mapped_band_structure:
                     output_band_structures.append(mapped_band_structure)
@@ -1151,7 +1164,7 @@ class ResultsNormalizerBase:
                 or output_band_structures
                 or output_greens_functions
             ):
-                output_system_ref = getattr(output, 'model_system_ref', None)
+                output_system_ref = output.model_system_ref
                 score = (
                     1
                     if representative_system is not None
@@ -1166,40 +1179,37 @@ class ResultsNormalizerBase:
                     latest_band_structures = output_band_structures
                     latest_greens_functions = output_greens_functions
 
-            for absorption in getattr(output, 'absorption_spectra', []) or []:
+            for absorption in output.absorption_spectra or []:
                 mapped_spectrum = self._map_spectrum(absorption, 'unavailable')
                 if mapped_spectrum:
                     spectra_sections.append(mapped_spectrum)
-            for xas in getattr(output, 'xas_spectra', []) or []:
+            for xas in output.xas_spectra or []:
                 mapped_spectrum = self._map_spectrum(xas, 'XAS')
                 if mapped_spectrum:
                     spectra_sections.append(mapped_spectrum)
 
-            for rg in getattr(output, 'radii_of_gyration', []) or []:
+            for rg in output.radii_of_gyration or []:
                 mapped_rg = self._map_radius_of_gyration(rg)
                 if mapped_rg:
                     rg_sections.append(mapped_rg)
 
-            point_time = getattr(output, 'wall_end', None)
+            point_time = output.wall_end
             if point_time is None:
                 point_time = float(index)
 
-            temperatures = getattr(output, 'temperatures', []) or []
-            if temperatures and getattr(temperatures[0], 'value', None) is not None:
+            temperatures = output.temperatures or []
+            if temperatures and temperatures[0].value is not None:
                 temperature_series.append(float(temperatures[0].value.magnitude))
                 temperature_time.append(float(point_time))
 
-            potential_energies = getattr(output, 'potential_energies', []) or []
-            total_energies = getattr(output, 'total_energies', []) or []
+            potential_energies = output.potential_energies or []
+            total_energies = output.total_energies or []
             energy_source = (
                 potential_energies[0]
                 if potential_energies
                 else total_energies[0] if total_energies else None
             )
-            if (
-                energy_source is not None
-                and getattr(energy_source, 'value', None) is not None
-            ):
+            if energy_source is not None and energy_source.value is not None:
                 potential_energy_series.append(float(energy_source.value.magnitude))
                 potential_energy_time.append(float(point_time))
 

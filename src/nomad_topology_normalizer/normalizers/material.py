@@ -144,17 +144,17 @@ class MaterialNormalizer:
 
     @classmethod
     def _labels_from_topology_root(cls, material: Material) -> list[str]:
-        topology = getattr(material, 'topology', None)
+        topology = material.topology
         if not topology:
             return []
 
         root = topology[0]
-        atoms_ref = getattr(root, 'atoms_ref', None)
+        atoms_ref = root.atoms_ref
         labels = cls._labels_from_atoms_like(atoms_ref)
         if labels:
             return labels
 
-        atoms = getattr(root, 'atoms', None)
+        atoms = root.atoms
         return cls._labels_from_atoms_like(atoms)
 
     def material(self, populate_topology: bool = True) -> Material:
@@ -168,21 +168,16 @@ class MaterialNormalizer:
                 # Get Hill formula from v2 schema
                 hill_formula = None
                 labels = None
-                if (
-                    hasattr(self.repr_system, 'chemical_formula')
-                    and self.repr_system.chemical_formula
-                ):
+                chemical_formula = getattr(self.repr_system, 'chemical_formula', None)
+                particle_states = getattr(self.repr_system, 'particle_states', None)
+                if chemical_formula:
                     hill_formula = self.repr_system.chemical_formula.hill
 
-                if (
-                    not hill_formula
-                    and hasattr(self.repr_system, 'particle_states')
-                    and self.repr_system.particle_states
-                ):
+                if not hill_formula and particle_states:
                     labels = [
                         ps.chemical_symbol
-                        for ps in self.repr_system.particle_states
-                        if hasattr(ps, 'chemical_symbol') and ps.chemical_symbol
+                        for ps in particle_states
+                        if ps.chemical_symbol
                     ]
                 if not labels:
                     labels = self._labels_from_atoms_like(
@@ -203,7 +198,11 @@ class MaterialNormalizer:
 
                 self.structural_type = getattr(self.repr_system, 'type', None)
                 if self.structural_type:
-                    material.structural_type = self.structural_type
+                    allowed_structural_types = set(
+                        Material.m_def.all_quantities['structural_type'].type
+                    )
+                    if self.structural_type in allowed_structural_types:
+                        material.structural_type = self.structural_type
                 # Get classification from results.material if already set
                 # (TopologyNormalizer runs first and may have set dimensionality)
                 existing_dimensionality = material.dimensionality
@@ -211,10 +210,12 @@ class MaterialNormalizer:
                     # Use existing value from topology normalizer
                     pass
                 # Fallback: infer from system type if available
-                elif hasattr(self.repr_system, 'dimensionality'):
-                    dim_value = self._dimensionality_to_results_enum(
-                        self.repr_system.dimensionality
-                    )
+                else:
+                    try:
+                        dimensionality = self.repr_system.dimensionality
+                    except Exception:
+                        dimensionality = None
+                    dim_value = self._dimensionality_to_results_enum(dimensionality)
                     if dim_value is not None:
                         material.dimensionality = dim_value
 
@@ -505,9 +506,10 @@ class MaterialNormalizer:
         # Fill in prototype information. SystemNormalizer has cached many of
         # the values during it's own analysis. These cached values are used
         # here.
-        proto = (
-            getattr(self.repr_system, 'prototype', None) if self.repr_system else None
-        )
+        try:
+            proto = self.repr_system.prototype if self.repr_system else None
+        except Exception:
+            proto = None
         proto = proto[0] if proto else None
         if proto:
             # Prototype id and formula

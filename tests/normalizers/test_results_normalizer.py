@@ -746,9 +746,7 @@ def test_data_schema_band_structure_uses_numerical_settings_kline_path_fallback(
 
     dft = DFT()
     k_space = KSpace()
-    k_space.k_line_path = KLinePath(
-        points=np.array([[0.0, 0.0, 0.0], [0.5, 0.0, 0.0]])
-    )
+    k_space.k_line_path = _kline_path()
     dft.numerical_settings.append(k_space)
     simulation.model_method.append(dft)
 

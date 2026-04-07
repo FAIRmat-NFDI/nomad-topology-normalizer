@@ -564,21 +564,22 @@ class TopologyNormalizer(Normalizer):
             except Exception:
                 pass
 
+            positions = getattr(system, 'positions', None)
+            particle_states = getattr(system, 'particle_states', None)
+
             # Validate system has required data
             has_valid_data = (
                 groups
                 and len(groups) > 0
-                and system.positions is not None
-                and len(system.positions) > 0
-                and system.particle_states
-                and len(system.particle_states) > 0
+                and positions is not None
+                and len(positions) > 0
+                and particle_states
+                and len(particle_states) > 0
             )
 
             if has_valid_data:
                 topology: dict[str, System] = {}
-                original = get_topology_original(
-                    system.particle_states, self.entry_archive
-                )
+                original = get_topology_original(particle_states, self.entry_archive)
                 add_system(original, topology)
                 label_to_indices: dict[str, list] = defaultdict(list)
 
@@ -781,25 +782,28 @@ class TopologyNormalizer(Normalizer):
             label=root_id,
             description='Imported from v2.System',
         )
-        v2_props = section.subsystem_properties or section.system_properties
+        v2_props = getattr(section, 'subsystem_properties', None) or getattr(
+            section, 'system_properties', None
+        )
         copy_properties_to_system(root, v2_props)
         add_system(root, topology, original)
         add_system_info_2(root, topology, parent_system=self.repr_system)
 
         def recurse(v2sec: SystemV2, parent_sys: System, cur_path: str):
-            for proxy in v2sec.sub_systems or []:
+            for proxy in getattr(v2sec, 'sub_systems', []) or []:
                 sub = getattr(proxy, 'value', proxy)
                 if not isinstance(sub, SubSystemV2):
                     continue
 
-                child_id = f'{cur_path}/{sub.name}'
+                child_name = getattr(sub, 'name', None)
+                child_id = f'{cur_path}/{child_name or ""}'
                 child = System(
                     method='parser',
-                    label=sub.name or 'subsystem',
+                    label=child_name or 'subsystem',
                     description='Imported from v2.System',
                 )
 
-                sub_props = sub.subsystem_properties
+                sub_props = getattr(sub, 'subsystem_properties', None)
                 copy_properties_to_system(child, sub_props)
                 add_system(child, topology, parent_sys)
                 add_system_info_2(child, topology, parent_system=self.repr_system)
@@ -1056,14 +1060,11 @@ class TopologyNormalizer(Normalizer):
         """
         # Validate data structure exists
         data = self.entry_archive.data
-        if not data or not hasattr(data, 'model_system') or not data.model_system:
+        if not data or not data.model_system:
             return []
 
         # Search for first core_hole in model_system hierarchy
         for model_system in data.model_system:
-            if not hasattr(model_system, 'particle_states'):
-                continue
-
             particle_states = model_system.particle_states or []
             for particle_state in particle_states:
                 core_hole = getattr(particle_state, 'core_hole', None)

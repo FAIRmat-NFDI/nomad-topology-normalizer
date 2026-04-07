@@ -425,25 +425,21 @@ class MethodNormalizer:  # TODO: add normalizer for atom_parameters.label
                     simulation.precision.k_line_density = k_line_density
 
             for em_index, em in enumerate(
-                er := getattr(methods[-1], 'electrons_representation', [])
+                er := methods[-1].electrons_representation
             ):
-                if (nt := getattr(em, 'native_tier')) is not None:
+                if (nt := em.native_tier) is not None:
                     try:
                         er[em_index].native_tier = f'{self.run.program.name} - {nt}'
                     except AttributeError:
                         pass
-                if 'wavefunction' in getattr(em, 'scope', []):
-                    simulation.precision.basis_set = getattr(em, 'type')
-                    simulation.precision.native_tier = getattr(em, 'native_tier')
-                    for bs in getattr(em, 'basis_set', []):
-                        if getattr(bs, 'type') is not None:
+                if 'wavefunction' in (em.scope or []):
+                    simulation.precision.basis_set = em.type
+                    simulation.precision.native_tier = em.native_tier
+                    for bs in em.basis_set or []:
+                        if bs.type is not None:
                             # only one of either will be set
-                            simulation.precision.planewave_cutoff = getattr(
-                                bs, 'cutoff'
-                            )
-                            simulation.precision.apw_cutoff = getattr(
-                                bs, 'cutoff_fractional'
-                            )
+                            simulation.precision.planewave_cutoff = bs.cutoff
+                            simulation.precision.apw_cutoff = bs.cutoff_fractional
                             break
 
         method.equation_of_state_id = self.equation_of_state_id(
