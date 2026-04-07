@@ -149,8 +149,139 @@ def test_topology_root_populates_atoms_when_ase_conversion_fails(monkeypatch):
     original = topology[0]
     assert original.label == 'original'
     assert original.atoms is not None
+    expected_atoms_cls = System.m_def.all_sub_sections['atoms'].sub_section.section_cls
+    assert isinstance(original.atoms, expected_atoms_cls)
     assert original.atoms.positions is not None
     assert len(original.atoms.positions) == 2
+
+
+def test_topology_calculation_prefers_representative_system():
+    archive = EntryArchive(metadata=EntryMetadata())
+
+    non_rep = ModelSystem(name='non_rep', is_representative=False)
+
+    representative = ModelSystem(
+        name='rep_system',
+        type='molecule',
+        is_representative=True,
+        positions=np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]]) * ureg.angstrom,
+        n_particles=2,
+    )
+    representative.particle_states.append(
+        AtomsState(chemical_symbol='H', atomic_number=1)
+    )
+    representative.particle_states.append(
+        AtomsState(chemical_symbol='H', atomic_number=1)
+    )
+    representative.lattice_vectors = np.eye(3) * 10.0 * ureg.angstrom
+    representative.periodic_boundary_conditions = [True, True, True]
+    representative.sub_systems.append(
+        ModelSystem(
+            name='molecule',
+            branch_label='molecule',
+            particle_indices=np.array([0, 1], dtype=np.int32),
+        )
+    )
+
+    simulation = Simulation()
+    simulation.model_system.append(non_rep)
+    simulation.model_system.append(representative)
+    archive.data = simulation
+    archive.results = Results()
+    archive.results.material = Material()
+
+    normalizer = TopologyNormalizer()
+    normalizer.normalize(archive, LOGGER)
+
+    topology = archive.results.material.topology
+    assert topology is not None
+    assert len(topology) > 0
+    original = topology[0]
+    assert original.label == 'original'
+    assert original.n_atoms == 2
+
+
+def test_topology_root_normalizes_atomic_numbers_from_symbol_and_nat():
+    archive = EntryArchive(metadata=EntryMetadata())
+
+    root = ModelSystem(
+        name='test_system',
+        type='molecule',
+        is_representative=True,
+        positions=np.array([[0.0, 0.0, 0.0]]) * ureg.angstrom,
+        n_particles=1,
+    )
+    root.periodic_boundary_conditions = [False, False, False]
+    root.particle_states.append(AtomsState(chemical_symbol='Sr', atomic_number=238))
+    root.sub_systems.append(
+        ModelSystem(
+            name='atom',
+            branch_label='molecule',
+            particle_indices=np.array([0], dtype=np.int32),
+        )
+    )
+
+    simulation = Simulation()
+    simulation.model_system.append(root)
+    archive.data = simulation
+    archive.results = Results()
+    archive.results.material = Material()
+
+    normalizer = TopologyNormalizer()
+    normalizer.normalize(archive, LOGGER)
+
+    topology = archive.results.material.topology
+    assert topology is not None
+    assert len(topology) > 0
+    original = topology[0]
+    assert original.atoms is not None
+    assert original.atoms.labels[0] == 'Sr'
+    assert original.atoms.atomic_numbers[0] == 38
+
+
+def test_topology_root_converts_unitless_geometry_to_meter_storage():
+    archive = EntryArchive(metadata=EntryMetadata())
+
+    root = ModelSystem(
+        name='test_system',
+        type='bulk',
+        is_representative=True,
+        positions=np.array([[0.0, 0.0, 0.0], [1.0, 2.0, 3.0]]),
+        n_particles=2,
+    )
+    root.lattice_vectors = np.array(
+        [[5.0, 0.0, 0.0], [0.0, 5.0, 0.0], [0.0, 0.0, 5.0]]
+    )
+    root.periodic_boundary_conditions = [True, True, True]
+    root.particle_states.append(AtomsState(chemical_symbol='Si', atomic_number=14))
+    root.particle_states.append(AtomsState(chemical_symbol='Si', atomic_number=14))
+    root.sub_systems.append(
+        ModelSystem(
+            name='subsystem',
+            branch_label='molecule',
+            particle_indices=np.array([0, 1], dtype=np.int32),
+        )
+    )
+
+    simulation = Simulation()
+    simulation.model_system.append(root)
+    archive.data = simulation
+    archive.results = Results()
+    archive.results.material = Material()
+
+    normalizer = TopologyNormalizer()
+    normalizer.normalize(archive, LOGGER)
+
+    serialized = archive.m_to_dict()
+    top0 = serialized['results']['material']['topology'][0]
+    positions = np.array(top0['atoms']['positions'])
+    lattice_vectors = np.array(top0['atoms']['lattice_vectors'])
+
+    # Unitless payload is interpreted as angstrom-like and stored in meters.
+    assert positions[1, 0] == np.float64(1e-10)
+    assert positions[1, 1] == np.float64(2e-10)
+    assert positions[1, 2] == np.float64(3e-10)
+    assert lattice_vectors[0, 0] == np.float64(5e-10)
 
 
 def test_topology_calculation_nested_subsystems():

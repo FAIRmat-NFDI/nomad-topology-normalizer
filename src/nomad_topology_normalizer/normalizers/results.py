@@ -90,6 +90,7 @@ from nomad.config import config
 from nomad.datamodel import EntryArchive
 from nomad.datamodel.data import ArchiveSection
 from nomad.datamodel.metainfo.workflow import Workflow
+from nomad.datamodel.metainfo.simulation.calculation import BandEnergies
 from nomad.datamodel.results import (
     BSE,
     DFT,
@@ -644,8 +645,6 @@ class ResultsNormalizerBase:
         values = getattr(band_structure_section, 'value', None)
         if values is None:
             return None
-        if not runschema:
-            return None
         try:
             if not valid_array(np.array(values.magnitude)):
                 return None
@@ -659,12 +658,24 @@ class ResultsNormalizerBase:
             energies_array = energies_array[np.newaxis, :, np.newaxis]
         elif energies_array.ndim == 2:
             energies_array = energies_array[np.newaxis, :, :]
-        legacy_segment = runschema.calculation.BandEnergies()
+        legacy_segment = BandEnergies()
         legacy_segment.energies = energies_array * values.u
 
-        k_points = getattr(
-            getattr(band_structure_section, 'k_path', None), 'points', None
-        )
+        k_points = getattr(getattr(band_structure_section, 'k_path', None), 'points', None)
+        if not valid_array(k_points):
+            # Fallback for parsers that only store band-path information in
+            # model method numerical settings.
+            try:
+                numerical_settings = band_structure_section.m_xpath(
+                    'm_parent.m_parent.model_method[-1].numerical_settings',
+                    dict=False,
+                )
+            except Exception:
+                numerical_settings = None
+            for setting in numerical_settings or []:
+                k_points = getattr(getattr(setting, 'k_line_path', None), 'points', None)
+                if valid_array(k_points):
+                    break
         if not valid_array(k_points):
             # Legacy/GUI path requires kpoints for distance axis construction.
             return None

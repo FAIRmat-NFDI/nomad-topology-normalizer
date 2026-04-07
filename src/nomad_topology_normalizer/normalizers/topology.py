@@ -38,17 +38,18 @@ from collections import defaultdict
 
 import numpy as np
 from ase import Atoms
+from ase.data import atomic_numbers as _atomic_numbers
 from ase.data import chemical_symbols as _chemical_symbols
 from matid.clustering import SBC, Cluster
 from matid.symmetry.symmetryanalyzer import SymmetryAnalyzer
 from nomad import atomutils, utils
 from nomad.config import config
+from nomad.units import ureg
 
 # Conditional import of EntryArchive only works within entire NOMAD
 from nomad.datamodel.datamodel import EntryArchive
 from nomad.datamodel.metainfo.basesections.v2 import SubSystem as SubSystemV2
 from nomad.datamodel.metainfo.basesections.v2 import System as SystemV2
-from nomad.datamodel.metainfo.system import Atoms as NOMADAtoms
 from nomad.datamodel.results import (
     CoreHole,
     Material,
@@ -82,6 +83,7 @@ with open(pathlib.Path(__file__).parent / 'data/top_50k_material_ids.json') as f
 
 # Import functions from plugin's own common.py
 from nomad_topology_normalizer.normalizers.common import (
+    NOMADAtoms,
     ase_atoms_from_nomad_atoms,
     cell_from_ase_atoms,
     material_id_1d,
@@ -188,8 +190,28 @@ def add_system_info_2(  # noqa: PLR0912
             if state.chemical_symbol:
                 symbols.append(state.chemical_symbol)
             elif state.atomic_number:
-                symbols.append(chemical_symbols[state.atomic_number])
+                normalized_number = _normalize_atomic_number(state.atomic_number)
+                if normalized_number is not None:
+                    symbols.append(chemical_symbols[normalized_number])
         return symbols
+
+    def _normalize_atomic_number(number, symbol=None) -> int | None:
+        normalized = None
+        if number is not None:
+            try:
+                normalized = int(number)
+            except Exception:
+                normalized = None
+        if normalized is not None:
+            if normalized >= len(chemical_symbols) or normalized <= 0:
+                reduced = normalized % 100 if normalized > 0 else normalized
+                if 0 < reduced < len(chemical_symbols):
+                    normalized = reduced
+                else:
+                    normalized = None
+        if normalized is None and symbol:
+            normalized = _atomic_numbers.get(symbol)
+        return normalized
 
     def _populate_chemistry(system: System, symbols: list[str]) -> None:
         if not symbols:
@@ -215,42 +237,72 @@ def add_system_info_2(  # noqa: PLR0912
         if positions is None:
             return None
 
+        def _to_meter_array(value) -> np.ndarray | None:
+            if value is None:
+                return None
+            try:
+                if hasattr(value, 'to'):
+                    arr = np.asarray(value.to(ureg.meter).magnitude, dtype=float)
+                else:
+                    arr = np.asarray(value, dtype=float)
+            except Exception:
+                return None
+            if arr.ndim != 2 or arr.shape[1] != 3:
+                return None
+            if not np.isfinite(arr).all():
+                return None
+            # Heuristic: atomistic coordinates/cell vectors should not be in the
+            # micrometer range when expressed in meters. If they are, values are
+            # likely angstrom-like payloads that lost units upstream.
+            if arr.size and np.nanmax(np.abs(arr)) > 1e-5:
+                arr = arr * 1e-10
+            return arr
+
+        pos_arr = _to_meter_array(positions)
+        if pos_arr is None:
+            return None
+
         particle_states = getattr(model_system, 'particle_states', None) or []
         labels = []
         atomic_numbers = []
         for state in particle_states:
             symbol = getattr(state, 'chemical_symbol', None)
             number = getattr(state, 'atomic_number', None)
-            if symbol is None and number is not None:
-                try:
-                    symbol = chemical_symbols[int(number)]
-                except Exception:
-                    symbol = None
+            normalized_number = _normalize_atomic_number(number, symbol)
+            if symbol is None and normalized_number is not None:
+                symbol = chemical_symbols[normalized_number]
+            elif symbol is not None and normalized_number is None:
+                normalized_number = _atomic_numbers.get(symbol)
+            if normalized_number is None or normalized_number <= 0:
+                normalized_number = 1
             labels.append(symbol if symbol is not None else 'X')
-            atomic_numbers.append(int(number) if number is not None else 0)
+            atomic_numbers.append(int(normalized_number))
 
-        n_positions = len(positions)
+        n_positions = len(pos_arr)
         if len(labels) != n_positions:
             # Keep array lengths consistent with coordinates.
             if len(labels) < n_positions:
                 missing = n_positions - len(labels)
                 labels.extend(['X'] * missing)
-                atomic_numbers.extend([0] * missing)
+                atomic_numbers.extend([1] * missing)
             else:
                 labels = labels[:n_positions]
                 atomic_numbers = atomic_numbers[:n_positions]
 
         atoms = NOMADAtoms()
-        atoms.positions = positions
+        atoms.positions = pos_arr * ureg.meter
         atoms.labels = labels
         atoms.atomic_numbers = atomic_numbers
         atoms.species = atomic_numbers
         lattice_vectors = getattr(model_system, 'lattice_vectors', None)
-        if lattice_vectors is not None:
-            atoms.lattice_vectors = lattice_vectors
+        lattice_arr = _to_meter_array(lattice_vectors)
+        if lattice_arr is not None:
+            atoms.lattice_vectors = lattice_arr * ureg.meter
         pbc = getattr(model_system, 'periodic_boundary_conditions', None)
         if pbc is not None:
-            atoms.periodic = pbc
+            pbc_arr = np.asarray(pbc, dtype=bool).reshape(-1)
+            if pbc_arr.size >= 3:
+                atoms.periodic = pbc_arr[:3].tolist()
 
         return atoms
 
@@ -478,24 +530,32 @@ class TopologyNormalizer(Normalizer):
         groups = None
         result = None
 
-        # Extract system from data structure
-        data = self.entry_archive.data
-        try:
-            if (
-                data
-                and isinstance(
-                    data,
-                    __import__(
-                        'nomad_simulations.schema_packages.general',
-                        fromlist=['Simulation'],
-                    ).Simulation,
-                )
-                and data.model_system
-                and len(data.model_system) > 0
-            ):
-                system = data.model_system[0]
-        except (AttributeError, IndexError):
-            pass
+        # Prefer the already resolved representative system. This keeps
+        # topology/root structure payload aligned with the system selected for
+        # results/material population.
+        if isinstance(self.repr_system, SystemV2):
+            system = self.repr_system
+
+        # Fallback to first model_system for safety if representative resolution
+        # is unavailable.
+        if system is None:
+            data = self.entry_archive.data
+            try:
+                if (
+                    data
+                    and isinstance(
+                        data,
+                        __import__(
+                            'nomad_simulations.schema_packages.general',
+                            fromlist=['Simulation'],
+                        ).Simulation,
+                    )
+                    and data.model_system
+                    and len(data.model_system) > 0
+                ):
+                    system = data.model_system[0]
+            except (AttributeError, IndexError):
+                pass
 
         # Validate system type and extract groups
         if system and isinstance(system, SystemV2):
