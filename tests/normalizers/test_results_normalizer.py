@@ -844,6 +844,66 @@ def test_data_schema_band_structure_uses_kline_vertex_values_fallback():
     ).shape[1]
 
 
+def test_data_schema_propagates_reference_energy_to_legacy_electronic_sections():
+    """Normalization scope: propagate HOE reference to BS/DOS compatibility payloads."""
+    archive = EntryArchive(metadata=EntryMetadata())
+    archive.results = Results()
+    archive.results.properties = Properties()
+
+    simulation = Simulation()
+    simulation.program = Program(name='exciting')
+    simulation.model_method.append(DFT())
+
+    model_system = ModelSystem(
+        name='test_system',
+        type='bulk',
+        is_representative=True,
+        positions=np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]]) * ureg.angstrom,
+        n_particles=2,
+    )
+    model_system.particle_states.append(
+        AtomsState(chemical_symbol='Si', atomic_number=14)
+    )
+    model_system.particle_states.append(
+        AtomsState(chemical_symbol='Si', atomic_number=14)
+    )
+    model_system.lattice_vectors = np.eye(3) * 5.43 * ureg.angstrom
+    model_system.periodic_boundary_conditions = [True, True, True]
+    simulation.model_system.append(model_system)
+
+    reference_energy = 1.0 * ureg.eV
+
+    output = Outputs()
+    band_structure = ElectronicBandStructure(value=np.array([[1.0, 1.1]]) * ureg.eV)
+    band_structure.k_path = _kline_path()
+    band_structure.highest_occupied = reference_energy
+    output.electronic_band_structures.append(band_structure)
+
+    dos = ElectronicDensityOfStates(value=np.array([0.1, 0.2, 0.3]) / ureg.eV)
+    dos.energies = Energy2(points=np.array([-1.0, 0.0, 1.0]) * ureg.eV)
+    output.electronic_dos.append(dos)
+
+    output.electronic_band_gaps.append(ElectronicBandGap(value=0.5 * ureg.eV))
+    simulation.outputs.append(output)
+    archive.data = simulation
+
+    normalizer = ResultsNormalizer()
+    normalizer.normalize(archive, LOGGER)
+
+    electronic = archive.results.properties.electronic
+    assert electronic is not None
+
+    assert electronic.band_structure_electronic
+    bs = electronic.band_structure_electronic[0]
+    assert bs.band_gap
+    assert bs.band_gap[0].energy_highest_occupied is not None
+
+    assert electronic.dos_electronic
+    dos_compat = electronic.dos_electronic[0]
+    assert dos_compat.band_gap
+    assert dos_compat.band_gap[0].energy_highest_occupied is not None
+
+
 def test_data_schema_populates_deprecated_dos_mapping():
     """v2 DOS mapping writes deprecated dos_electronic compatibility mirror."""
     archive = EntryArchive(metadata=EntryMetadata())

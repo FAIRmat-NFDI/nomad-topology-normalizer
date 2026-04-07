@@ -750,6 +750,16 @@ class ResultsNormalizerBase:
             pass
 
         band_structure.spin_polarized = energies_array.shape[0] == 2
+
+        highest_occupied = band_structure_section.highest_occupied
+        lowest_unoccupied = band_structure_section.lowest_unoccupied
+        if highest_occupied is not None or lowest_unoccupied is not None:
+            band_gap = BandGapDeprecated()
+            band_gap.energy_highest_occupied = highest_occupied
+            band_gap.energy_lowest_unoccupied = lowest_unoccupied
+            if highest_occupied is not None and lowest_unoccupied is not None:
+                band_gap.value = max(0.0, (lowest_unoccupied - highest_occupied).magnitude)
+            band_structure.m_add_sub_section(BandStructureElectronic.band_gap, band_gap)
         return band_structure
 
     def _map_greens_functions(
@@ -1161,6 +1171,22 @@ class ResultsNormalizerBase:
             output_dos_sections: list[DOSElectronic] = []
             output_band_structures: list[BandStructureElectronic] = []
             output_greens_functions: list[GreensFunctionsElectronic] = []
+            output_highest_occupied = None
+
+            for band_structure in output.electronic_band_structures or []:
+                output_highest_occupied = band_structure.highest_occupied
+                if output_highest_occupied is not None:
+                    break
+            if output_highest_occupied is None:
+                for eigenvalues in output.electronic_eigenvalues or []:
+                    output_highest_occupied = eigenvalues.highest_occupied
+                    if output_highest_occupied is not None:
+                        break
+            if output_highest_occupied is None:
+                for dos in output.electronic_dos or []:
+                    output_highest_occupied = dos.energies_origin
+                    if output_highest_occupied is not None:
+                        break
 
             for bg in output.electronic_band_gaps or []:
                 if bg.value is None:
@@ -1168,6 +1194,11 @@ class ResultsNormalizerBase:
                 bg_result = BandGap()
                 bg_result.value = bg.value
                 bg_result.type = bg.type
+                if output_highest_occupied is not None:
+                    bg_result.energy_highest_occupied = output_highest_occupied
+                    bg_result.energy_lowest_unoccupied = (
+                        output_highest_occupied + bg.value
+                    )
                 output_band_gaps.append(bg_result)
 
             dos_data_sections: list[dict] = []
@@ -1186,6 +1217,11 @@ class ResultsNormalizerBase:
                     dos_result.energies = dos_data_sections[0]['energies_ref']
                     dos_result.total = totals
                     dos_result.spin_polarized = len(dos_data_sections) == 2
+                    if output_highest_occupied is not None:
+                        dos_result.energy_fermi = output_highest_occupied
+                        dos_bg = BandGapDeprecated()
+                        dos_bg.energy_highest_occupied = output_highest_occupied
+                        dos_result.m_add_sub_section(DOSElectronic.band_gap, dos_bg)
                     output_dos_sections.append(dos_result)
 
             for band_structure in (output.electronic_band_structures or []):
