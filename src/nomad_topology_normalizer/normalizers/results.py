@@ -664,6 +664,40 @@ class ResultsNormalizerBase:
             energies_array = energies_array[np.newaxis, :, np.newaxis]
         elif energies_array.ndim == 2:
             energies_array = energies_array[np.newaxis, :, :]
+
+        def _resample_k_points(points, n_target: int):
+            """Resample piecewise-linear k-path points to `n_target` samples."""
+            if n_target <= 0:
+                return points
+            try:
+                pts = np.array(points, dtype=float)
+            except Exception:
+                return points
+            if pts.ndim != 2 or pts.shape[1] != 3:
+                return points
+            if pts.shape[0] == n_target:
+                return pts
+            if pts.shape[0] == 1:
+                return np.repeat(pts, n_target, axis=0)
+
+            deltas = np.linalg.norm(np.diff(pts, axis=0), axis=1)
+            cumulative = np.concatenate(([0.0], np.cumsum(deltas)))
+            total = cumulative[-1]
+            if total <= 0:
+                return np.repeat(pts[:1], n_target, axis=0)
+
+            targets = np.linspace(0.0, total, n_target)
+            resampled = np.empty((n_target, 3), dtype=float)
+            seg = 0
+            for i, target in enumerate(targets):
+                while seg < len(cumulative) - 2 and target > cumulative[seg + 1]:
+                    seg += 1
+                start = cumulative[seg]
+                end = cumulative[seg + 1]
+                alpha = 0.0 if end <= start else (target - start) / (end - start)
+                resampled[i] = pts[seg] * (1.0 - alpha) + pts[seg + 1] * alpha
+            return resampled
+
         segment_cls = BandEnergies
         if runschema and hasattr(runschema, 'calculation'):
             segment_cls = runschema.calculation.BandEnergies
@@ -698,6 +732,11 @@ class ResultsNormalizerBase:
         if not valid_array(k_points):
             # Legacy/GUI path requires kpoints for distance axis construction.
             return None
+
+        # GUI assumes k-point and energy axes have matching length.
+        n_energy_kpoints = int(energies_array.shape[1])
+        if np.array(k_points).shape[0] != n_energy_kpoints:
+            k_points = _resample_k_points(k_points, n_energy_kpoints)
         legacy_segment.kpoints = k_points
 
         reciprocal_cell = band_structure_section.reciprocal_cell
@@ -1261,6 +1300,43 @@ class ResultsNormalizerBase:
                 latest_dos_sections[0].energies = '/run/0/calculation/0/dos_electronic/0/energies'
                 latest_dos_sections[0].total = run_total_refs
 
+        # `results.properties.electronic.band_structure_electronic.segment` is a
+        # reference-typed quantity. For valid references, materialize compatible
+        # legacy sections under run/calculation and point results segments there.
+        if runschema and latest_band_structures:
+            calculation = self._ensure_legacy_run_calculation(archive)
+            if calculation is not None:
+                calculation.band_structure_electronic = []
+                run_band_structures: list[BandStructureElectronic] = []
+                for band_structure in latest_band_structures:
+                    legacy_bs = runschema.calculation.BandStructure()
+                    if band_structure.reciprocal_cell is not None:
+                        legacy_bs.reciprocal_cell = band_structure.reciprocal_cell
+                    if band_structure.energy_fermi is not None:
+                        legacy_bs.energy_fermi = band_structure.energy_fermi
+
+                    for segment in band_structure.segment or []:
+                        legacy_segment = runschema.calculation.BandEnergies()
+                        legacy_segment.energies = segment.energies
+                        legacy_segment.kpoints = segment.kpoints
+                        legacy_bs.segment.append(legacy_segment)
+
+                    calculation.band_structure_electronic.append(legacy_bs)
+
+                    bs_result = BandStructureElectronic()
+                    bs_result.spin_polarized = band_structure.spin_polarized
+                    bs_result.energy_fermi = band_structure.energy_fermi
+                    bs_result.reciprocal_cell = band_structure.reciprocal_cell
+                    bs_result.segment = legacy_bs.segment
+                    for info in band_structure.band_gap or []:
+                        info_new = BandGapDeprecated().m_from_dict(info.m_to_dict())
+                        bs_result.m_add_sub_section(
+                            BandStructureElectronic.band_gap, info_new
+                        )
+                    run_band_structures.append(bs_result)
+
+                latest_band_structures = run_band_structures
+
         if has_electronic_payload:
             electronic = properties.electronic
             if electronic is None:
@@ -1546,8 +1622,11 @@ class ResultsNormalizerBase:
                 if valid:
                     # Fill band structure data to the newer, improved data layout
                     bs_results = BandStructureElectronic()
-                    bs_results.reciprocal_cell = bs
-                    bs_results.segment = bs.segment
+                    bs_results.reciprocal_cell = bs.reciprocal_cell
+                    bs_results.segment = [
+                        segment.__class__().m_from_dict(segment.m_to_dict())
+                        for segment in bs.segment
+                    ]
                     bs_results.spin_polarized = (
                         bs_results.segment[0].energies.shape[0] > 1
                     )
@@ -2048,7 +2127,10 @@ class ResultsNormalizerBase:
             if valid:
                 # Fill band structure data to the newer, improved data layout
                 bs_new = BandStructurePhonon()
-                bs_new.segment = bs.segment
+                bs_new.segment = [
+                    segment.__class__().m_from_dict(segment.m_to_dict())
+                    for segment in bs.segment
+                ]
                 return bs_new
 
         return None

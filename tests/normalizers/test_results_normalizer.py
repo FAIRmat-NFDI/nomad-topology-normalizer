@@ -685,8 +685,8 @@ def test_data_schema_prefers_representative_system_outputs_for_electronic_proper
     assert len(electronic.band_structure_electronic or []) == 1
 
 
-def test_data_schema_band_structure_mapping_does_not_create_run_sections():
-    """Band structure mapping from v2 outputs must not create legacy run/calculation."""
+def test_data_schema_band_structure_mapping_creates_valid_segment_refs():
+    """Band structure mapping from v2 outputs should create non-orphan segment refs."""
     archive = EntryArchive(metadata=EntryMetadata())
     archive.results = Results()
     archive.results.properties = Properties()
@@ -723,7 +723,7 @@ def test_data_schema_band_structure_mapping_does_not_create_run_sections():
     normalizer.normalize(archive, LOGGER)
 
     serialized = archive.m_to_dict()
-    assert not serialized.get('run')
+    assert serialized.get('run')
     bs = (
         serialized.get('results', {})
         .get('properties', {})
@@ -733,6 +733,10 @@ def test_data_schema_band_structure_mapping_does_not_create_run_sections():
     assert bs
     segments = bs[0].get('segment', [])
     assert segments
+    assert segments[0] != '/'
+    assert str(segments[0]).startswith(
+        '/run/0/calculation/0/band_structure_electronic/0/segment/'
+    )
 
 
 def test_data_schema_band_structure_uses_numerical_settings_kline_path_fallback():
@@ -781,6 +785,7 @@ def test_data_schema_band_structure_uses_numerical_settings_kline_path_fallback(
     assert electronic.band_structure_electronic
     segments = electronic.band_structure_electronic[0].segment
     assert segments
+    assert segments[0].m_def.name != 'EntryArchive'
     assert np.array(segments[0].kpoints).shape[0] > 0
 
 
@@ -834,7 +839,9 @@ def test_data_schema_band_structure_uses_kline_vertex_values_fallback():
     assert electronic.band_structure_electronic
     segments = electronic.band_structure_electronic[0].segment
     assert segments
-    assert np.array(segments[0].kpoints).shape[0] == 3
+    assert np.array(segments[0].kpoints).shape[0] == np.array(
+        segments[0].energies.magnitude
+    ).shape[1]
 
 
 def test_data_schema_populates_deprecated_dos_mapping():
