@@ -1102,16 +1102,6 @@ class ResultsNormalizerBase:
             return True
 
         data = archive.data
-        try:
-            outputs = data.outputs if data else None
-        except Exception:
-            outputs = None
-        if not outputs:
-            return
-
-        had_dos_input = any(
-            len(output.electronic_dos or []) > 0 for output in outputs
-        )
         properties = archive.results.properties
         if properties is None:
             properties = archive.results.m_create(Properties)
@@ -1132,6 +1122,17 @@ class ResultsNormalizerBase:
         geometry_optimization = self.geometry_optimization()
         if geometry_optimization is not None:
             properties.geometry_optimization = geometry_optimization
+
+        try:
+            outputs = data.outputs if data else None
+        except Exception:
+            outputs = None
+        if not outputs:
+            return
+
+        had_dos_input = any(
+            len(output.electronic_dos or []) > 0 for output in outputs
+        )
 
         # Keep legacy-equivalent behavior: electronic properties should represent
         # the latest relevant output payload, while trajectory/spectra can aggregate.
@@ -2339,32 +2340,25 @@ class ResultsNormalizerBase:
             ):
                 geo_opt = GeometryOptimization()
                 
-                # Map trajectory from archive.data.outputs or legacy calculations_ref
-                trajectory_mapped = False
-                if (
-                    hasattr(self.entry_archive, 'data')
-                    and hasattr(self.entry_archive.data, 'outputs')
-                    and self.entry_archive.data.outputs
-                ):
-                    # New nomad-simulations schema: map from data.outputs
-                    geo_opt.trajectory = self.entry_archive.data.outputs
-                    trajectory_mapped = True
-                    # Map system_optimized from final output
-                    final_output = self.entry_archive.data.outputs[-1]
-                    if hasattr(final_output, 'model_system_ref') and final_output.model_system_ref:
-                        geo_opt.system_optimized = final_output.model_system_ref
-                    elif (
-                        hasattr(self.entry_archive.data, 'model_system')
-                        and self.entry_archive.data.model_system
-                    ):
-                        # Fallback to last model_system
-                        geo_opt.system_optimized = self.entry_archive.data.model_system[-1]
+                # KNOWN LIMITATION: Trajectory visualization unavailable for new schema workflows
+                # Both trajectory and system_optimized expect legacy runschema types:
+                # - trajectory: runschema.calculation.Calculation (not nomad-simulations Outputs)
+                # - system_optimized: runschema.system.System (not nomad-simulations ModelSystem)
+                # 
+                # Attempting to assign nomad-simulations sections to these fields raises TypeError.
+                # Migration policy decision: Skip compatibility population cleanly rather than
+                # mixing schema types or creating complex translation layers.
+                #
+                # Impact: GUI geometry optimization trajectory graph (energy vs steps) will show
+                # "no data" for new schema workflows. Only convergence values are populated.
+                #
+                # Resolution: GUI must be updated to read from archive.data.outputs directly.
+                # See dev_notes/MIGRATION_STATUS.md "Known Limitations" section.
                 
                 if results:
                     results_quantities = results.m_def.all_quantities
-                    # Legacy workflow schemas expose calculation references;
-                    # nomad-simulations workflows may not.
-                    if not trajectory_mapped and 'calculations_ref' in results_quantities and results.calculations_ref:
+                    # Legacy workflow schemas expose calculation references
+                    if 'calculations_ref' in results_quantities and results.calculations_ref:
                         geo_opt.trajectory = results.calculations_ref
 
                     if (
@@ -2397,17 +2391,17 @@ class ResultsNormalizerBase:
                     if optimization_type is not None:
                         geo_opt.type = optimization_type
 
-                    energy_tolerance = (
-                        method.convergence_tolerance_energy_difference
-                        if 'convergence_tolerance_energy_difference'
-                        in method_quantities
-                        else None
-                    )
-                    force_tolerance = (
-                        method.convergence_tolerance_force_maximum
-                        if 'convergence_tolerance_force_maximum' in method_quantities
-                        else None
-                    )
+                    energy_tolerance = None
+                    if 'convergence_tolerance_energy_difference' in method_quantities:
+                        energy_tolerance = method.convergence_tolerance_energy_difference
+                    elif hasattr(method, 'convergence_tolerance_energy_difference'):
+                        energy_tolerance = method.convergence_tolerance_energy_difference
+
+                    force_tolerance = None
+                    if 'convergence_tolerance_force_maximum' in method_quantities:
+                        force_tolerance = method.convergence_tolerance_force_maximum
+                    elif hasattr(method, 'convergence_tolerance_force_maximum'):
+                        force_tolerance = method.convergence_tolerance_force_maximum
 
                     # nomad-simulations workflows store geometry convergence
                     # thresholds under method.convergence_targets.
