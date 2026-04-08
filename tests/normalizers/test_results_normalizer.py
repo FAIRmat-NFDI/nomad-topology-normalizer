@@ -1280,6 +1280,42 @@ def test_data_schema_maps_geometry_optimization_workflow(archive_with_data_schem
     assert geometry_optimization.final_force_maximum is not None
 
 
+def test_data_schema_merges_electronic_payload_split_across_outputs(
+    archive_with_data_schema,
+):
+    representative = archive_with_data_schema.data.model_system[0]
+
+    output_bs = Outputs(model_system_ref=representative)
+    output_bs.electronic_band_structures.append(
+        ElectronicBandStructure(
+            value=np.array([[[0.0, 1.0], [0.1, 1.1]]]) * ureg.eV,
+            highest_occupied=0.0 * ureg.eV,
+            lowest_unoccupied=1.0 * ureg.eV,
+            k_path=_kline_path(),
+        )
+    )
+
+    output_dos = Outputs(model_system_ref=representative)
+    dos = ElectronicDensityOfStates(
+        value=np.array([0.2, 0.3, 0.4]) / ureg.eV,
+        spin_channel=0,
+    )
+    dos.energies = Energy2(points=np.array([-1.0, 0.0, 1.0]) * ureg.eV)
+    dos.energies_origin = 0.0 * ureg.eV
+    output_dos.electronic_dos.append(dos)
+
+    archive_with_data_schema.data.outputs = [output_bs, output_dos]
+
+    normalizer = ResultsNormalizer()
+    normalizer.normalize(archive_with_data_schema, LOGGER)
+
+    electronic = archive_with_data_schema.results.properties.electronic
+    assert electronic is not None
+    assert electronic.band_structure_electronic
+    if HAS_RUNSCHEMA:
+        assert electronic.dos_electronic
+
+
 def test_normalize_with_data_schema_calls_topology_normalizer(
     archive_with_data_schema, monkeypatch
 ):

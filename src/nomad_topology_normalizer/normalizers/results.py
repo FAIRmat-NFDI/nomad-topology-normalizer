@@ -1140,7 +1140,10 @@ class ResultsNormalizerBase:
         latest_dos_payload: list[dict] = []
         latest_band_structures: list[BandStructureElectronic] = []
         latest_greens_functions: list[GreensFunctionsElectronic] = []
-        best_electronic_score = -1
+        best_band_gap_score = -1
+        best_dos_score = -1
+        best_band_structure_score = -1
+        best_greens_score = -1
         spectra_sections: list[Spectra] = []
         rg_sections: list[RadiusOfGyration] = []
         temperature_series: list[float] = []
@@ -1270,12 +1273,7 @@ class ResultsNormalizerBase:
             if mapped_greens_functions:
                 output_greens_functions.append(mapped_greens_functions)
 
-            if (
-                output_band_gaps
-                or output_dos_sections
-                or output_band_structures
-                or output_greens_functions
-            ):
+            if output_band_gaps or output_dos_sections or output_band_structures or output_greens_functions:
                 output_system_ref = output.model_system_ref
                 score = (
                     1
@@ -1283,12 +1281,28 @@ class ResultsNormalizerBase:
                     and output_system_ref is representative_system
                     else 0
                 )
-                if score > best_electronic_score or score == best_electronic_score:
-                    best_electronic_score = score
+
+                # Select the best source independently per electronic property
+                # so split-output payloads are merged instead of overwritten.
+                if output_band_gaps and (score > best_band_gap_score or score == best_band_gap_score):
+                    best_band_gap_score = score
                     latest_band_gaps = output_band_gaps
+
+                if output_dos_sections and (score > best_dos_score or score == best_dos_score):
+                    best_dos_score = score
                     latest_dos_sections = output_dos_sections
                     latest_dos_payload = dos_data_sections
+
+                if output_band_structures and (
+                    score > best_band_structure_score or score == best_band_structure_score
+                ):
+                    best_band_structure_score = score
                     latest_band_structures = output_band_structures
+
+                if output_greens_functions and (
+                    score > best_greens_score or score == best_greens_score
+                ):
+                    best_greens_score = score
                     latest_greens_functions = output_greens_functions
 
             for absorption in output.absorption_spectra or []:
