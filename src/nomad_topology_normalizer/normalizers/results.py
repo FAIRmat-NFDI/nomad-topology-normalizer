@@ -753,12 +753,11 @@ class ResultsNormalizerBase:
 
         highest_occupied = band_structure_section.highest_occupied
         lowest_unoccupied = band_structure_section.lowest_unoccupied
-        if highest_occupied is not None or lowest_unoccupied is not None:
+        if highest_occupied is not None and lowest_unoccupied is not None:
             band_gap = BandGapDeprecated()
             band_gap.energy_highest_occupied = highest_occupied
             band_gap.energy_lowest_unoccupied = lowest_unoccupied
-            if highest_occupied is not None and lowest_unoccupied is not None:
-                band_gap.value = max(0.0, (lowest_unoccupied - highest_occupied).magnitude)
+            band_gap.value = max(0.0, (lowest_unoccupied - highest_occupied).magnitude)
             band_structure.m_add_sub_section(BandStructureElectronic.band_gap, band_gap)
         return band_structure
 
@@ -1127,6 +1126,13 @@ class ResultsNormalizerBase:
                         dos for dos in existing_dos if _is_valid_legacy_dos_entry(dos)
                     ]
 
+        # Geometry optimization workflow metadata is consumed directly by the
+        # geometry optimization card and should be available even when there is
+        # no electronic/spectroscopic payload in outputs.
+        geometry_optimization = self.geometry_optimization()
+        if geometry_optimization is not None:
+            properties.geometry_optimization = geometry_optimization
+
         # Keep legacy-equivalent behavior: electronic properties should represent
         # the latest relevant output payload, while trajectory/spectra can aggregate.
         latest_band_gaps: list[BandGap] = []
@@ -1228,6 +1234,37 @@ class ResultsNormalizerBase:
                 mapped_band_structure = self._map_band_structure(band_structure)
                 if mapped_band_structure:
                     output_band_structures.append(mapped_band_structure)
+
+            # Ensure compatibility card consumers can read a complete band-gap
+            # entry from band-structure references when output-level band gaps
+            # are available but parser band-structure sections do not carry
+            # explicit lowest-unoccupied values.
+            if output_band_gaps:
+                fallback_bg = next(
+                    (
+                        bg
+                        for bg in output_band_gaps
+                        if bg.value is not None
+                        and bg.energy_highest_occupied is not None
+                        and bg.energy_lowest_unoccupied is not None
+                    ),
+                    None,
+                )
+                if fallback_bg is not None:
+                    for mapped_band_structure in output_band_structures:
+                        existing_bg = mapped_band_structure.band_gap or []
+                        has_complete_bg = any(
+                            bg.value is not None
+                            and bg.energy_highest_occupied is not None
+                            and bg.energy_lowest_unoccupied is not None
+                            for bg in existing_bg
+                        )
+                        if has_complete_bg:
+                            continue
+                        mapped_band_structure.m_add_sub_section(
+                            BandStructureElectronic.band_gap,
+                            BandGapDeprecated().m_from_dict(fallback_bg.m_to_dict()),
+                        )
 
             mapped_greens_functions = self._map_greens_functions(output)
             if mapped_greens_functions:
@@ -2268,13 +2305,49 @@ class ResultsNormalizerBase:
                         workflow.results.final_displacement_maximum
                     )
                 if workflow.method is not None:
-                    geo_opt.type = workflow.method.type
-                    geo_opt.convergence_tolerance_energy_difference = (
-                        workflow.method.convergence_tolerance_energy_difference
+                    optimization_type = getattr(workflow.method, 'type', None)
+                    if optimization_type is None:
+                        optimization_type = getattr(
+                            workflow.method, 'optimization_type', None
+                        )
+                    if optimization_type is not None:
+                        geo_opt.type = optimization_type
+
+                    energy_tolerance = getattr(
+                        workflow.method,
+                        'convergence_tolerance_energy_difference',
+                        None,
                     )
-                    geo_opt.convergence_tolerance_force_maximum = (
-                        workflow.method.convergence_tolerance_force_maximum
+                    force_tolerance = getattr(
+                        workflow.method,
+                        'convergence_tolerance_force_maximum',
+                        None,
                     )
+
+                    # nomad-simulations workflows store geometry convergence
+                    # thresholds under method.convergence_targets.
+                    if energy_tolerance is None or force_tolerance is None:
+                        for target in getattr(
+                            workflow.method, 'convergence_targets', []
+                        ) or []:
+                            target_name = target.m_def.name
+                            if (
+                                energy_tolerance is None
+                                and target_name == 'EnergyConvergenceTarget'
+                            ):
+                                energy_tolerance = target.threshold
+                            elif (
+                                force_tolerance is None
+                                and target_name == 'ForceConvergenceTarget'
+                            ):
+                                force_tolerance = target.threshold
+
+                    if energy_tolerance is not None:
+                        geo_opt.convergence_tolerance_energy_difference = (
+                            energy_tolerance
+                        )
+                    if force_tolerance is not None:
+                        geo_opt.convergence_tolerance_force_maximum = force_tolerance
                 return geo_opt
 
         return None

@@ -43,6 +43,19 @@ from nomad_simulations.schema_packages.variables import (
     KLinePath,
     MatsubaraFrequency,
 )
+from nomad_simulations.schema_packages.workflow.general import (
+    EnergyConvergenceTarget,
+    ForceConvergenceTarget,
+)
+from nomad_simulations.schema_packages.workflow.geometry_optimization import (
+    GeometryOptimization as SimGeometryOptimizationWorkflow,
+)
+from nomad_simulations.schema_packages.workflow.geometry_optimization import (
+    GeometryOptimizationMethod as SimGeometryOptimizationMethod,
+)
+from nomad_simulations.schema_packages.workflow.geometry_optimization import (
+    GeometryOptimizationResults as SimGeometryOptimizationResults,
+)
 
 from nomad_topology_normalizer.normalizers.results import (
     ResultsNormalizerBase as ResultsNormalizer,
@@ -1238,6 +1251,33 @@ def test_data_schema_priority_over_run(archive_with_data_schema):
 
     # Should succeed without delegating to legacy normalizer
     assert archive_with_data_schema.results is not None
+
+
+def test_data_schema_maps_geometry_optimization_workflow(archive_with_data_schema):
+    workflow = SimGeometryOptimizationWorkflow()
+    workflow.method = SimGeometryOptimizationMethod(optimization_type='atomic')
+    workflow.method.convergence_targets = [
+        EnergyConvergenceTarget(threshold=1e-6 * ureg.eV),
+        ForceConvergenceTarget(threshold=1e-5 * ureg.newton),
+    ]
+    workflow.results = SimGeometryOptimizationResults(
+        final_energy_difference=2e-6 * ureg.eV,
+        final_force_maximum=4e-5 * ureg.newton,
+        final_displacement_maximum=1e-12 * ureg.meter,
+    )
+
+    archive_with_data_schema.workflow2 = workflow
+
+    normalizer = ResultsNormalizer()
+    normalizer.normalize(archive_with_data_schema, LOGGER)
+
+    geometry_optimization = archive_with_data_schema.results.properties.geometry_optimization
+    assert geometry_optimization is not None
+    assert geometry_optimization.type == 'atomic'
+    assert geometry_optimization.convergence_tolerance_energy_difference is not None
+    assert geometry_optimization.convergence_tolerance_force_maximum is not None
+    assert geometry_optimization.final_energy_difference is not None
+    assert geometry_optimization.final_force_maximum is not None
 
 
 def test_normalize_with_data_schema_calls_topology_normalizer(
