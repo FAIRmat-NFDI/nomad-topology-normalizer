@@ -2301,48 +2301,102 @@ class ResultsNormalizerBase:
         """
         path = ['workflow2']
         for workflow in traverse_reversed(self.entry_archive, path):
-            # Check validity
-            if workflow.m_def.name == 'GeometryOptimization':
+            workflow_sub_sections = workflow.m_def.all_sub_sections
+            method = workflow.method if 'method' in workflow_sub_sections else None
+            results = workflow.results if 'results' in workflow_sub_sections else None
+
+            optimization_type_value = None
+            if method is not None:
+                method_quantities = method.m_def.all_quantities
+                if 'optimization_type' in method_quantities:
+                    optimization_type_value = method.optimization_type
+                elif 'type' in method_quantities:
+                    optimization_type_value = method.type
+
+            has_geo_method = optimization_type_value is not None
+            has_geo_results = False
+            if results is not None:
+                results_quantities = results.m_def.all_quantities
+                has_geo_results = (
+                    (
+                        'final_energy_difference' in results_quantities
+                        and results.final_energy_difference is not None
+                    )
+                    or (
+                        'final_force_maximum' in results_quantities
+                        and results.final_force_maximum is not None
+                    )
+                    or (
+                        'final_displacement_maximum' in results_quantities
+                        and results.final_displacement_maximum is not None
+                    )
+                )
+
+            if (
+                workflow.__class__.__name__ == 'GeometryOptimization'
+                or has_geo_method
+                or has_geo_results
+            ):
                 geo_opt = GeometryOptimization()
-                if workflow.results:
-                    geo_opt.trajectory = workflow.results.calculations_ref
-                    if workflow.results.calculation_result_ref:
+                if results:
+                    results_quantities = results.m_def.all_quantities
+                    # Legacy workflow schemas expose calculation references;
+                    # nomad-simulations workflows may not.
+                    if (
+                        'calculations_ref' in results_quantities
+                        and results.calculations_ref
+                    ):
+                        geo_opt.trajectory = results.calculations_ref
+
+                    if (
+                        'calculation_result_ref' in results_quantities
+                        and results.calculation_result_ref
+                    ):
                         geo_opt.system_optimized = (
-                            workflow.results.calculation_result_ref.system_ref
+                            results.calculation_result_ref.system_ref
                         )
-                    geo_opt.energies = workflow.results
-                    geo_opt.final_energy_difference = (
-                        workflow.results.final_energy_difference
-                    )
-                    geo_opt.final_force_maximum = workflow.results.final_force_maximum
-                    geo_opt.final_displacement_maximum = (
-                        workflow.results.final_displacement_maximum
-                    )
-                if workflow.method is not None:
-                    optimization_type = getattr(workflow.method, 'type', None)
-                    if optimization_type is None:
-                        optimization_type = getattr(
-                            workflow.method, 'optimization_type', None
-                        )
+                    geo_opt.energies = results
+
+                    if 'final_energy_difference' in results_quantities:
+                        final_energy_difference = results.final_energy_difference
+                        if final_energy_difference is not None:
+                            geo_opt.final_energy_difference = final_energy_difference
+
+                    if 'final_force_maximum' in results_quantities:
+                        final_force_maximum = results.final_force_maximum
+                        if final_force_maximum is not None:
+                            geo_opt.final_force_maximum = final_force_maximum
+
+                    if 'final_displacement_maximum' in results_quantities:
+                        final_displacement_maximum = results.final_displacement_maximum
+                        if final_displacement_maximum is not None:
+                            geo_opt.final_displacement_maximum = final_displacement_maximum
+                if method is not None:
+                    method_quantities = method.m_def.all_quantities
+                    method_sub_sections = method.m_def.all_sub_sections
+                    optimization_type = optimization_type_value
                     if optimization_type is not None:
                         geo_opt.type = optimization_type
 
-                    energy_tolerance = getattr(
-                        workflow.method,
-                        'convergence_tolerance_energy_difference',
-                        None,
+                    energy_tolerance = (
+                        method.convergence_tolerance_energy_difference
+                        if 'convergence_tolerance_energy_difference'
+                        in method_quantities
+                        else None
                     )
-                    force_tolerance = getattr(
-                        workflow.method,
-                        'convergence_tolerance_force_maximum',
-                        None,
+                    force_tolerance = (
+                        method.convergence_tolerance_force_maximum
+                        if 'convergence_tolerance_force_maximum' in method_quantities
+                        else None
                     )
 
                     # nomad-simulations workflows store geometry convergence
                     # thresholds under method.convergence_targets.
                     if energy_tolerance is None or force_tolerance is None:
-                        for target in getattr(
-                            workflow.method, 'convergence_targets', []
+                        for target in (
+                            method.convergence_targets
+                            if 'convergence_targets' in method_sub_sections
+                            else []
                         ) or []:
                             target_name = target.m_def.name
                             if (
