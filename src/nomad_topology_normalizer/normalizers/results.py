@@ -2338,24 +2338,43 @@ class ResultsNormalizerBase:
                 or has_geo_results
             ):
                 geo_opt = GeometryOptimization()
+                
+                # Map trajectory from archive.data.outputs or legacy calculations_ref
+                trajectory_mapped = False
+                if (
+                    hasattr(self.entry_archive, 'data')
+                    and hasattr(self.entry_archive.data, 'outputs')
+                    and self.entry_archive.data.outputs
+                ):
+                    # New nomad-simulations schema: map from data.outputs
+                    geo_opt.trajectory = self.entry_archive.data.outputs
+                    trajectory_mapped = True
+                    # Map system_optimized from final output
+                    final_output = self.entry_archive.data.outputs[-1]
+                    if hasattr(final_output, 'model_system_ref') and final_output.model_system_ref:
+                        geo_opt.system_optimized = final_output.model_system_ref
+                    elif (
+                        hasattr(self.entry_archive.data, 'model_system')
+                        and self.entry_archive.data.model_system
+                    ):
+                        # Fallback to last model_system
+                        geo_opt.system_optimized = self.entry_archive.data.model_system[-1]
+                
                 if results:
                     results_quantities = results.m_def.all_quantities
                     # Legacy workflow schemas expose calculation references;
                     # nomad-simulations workflows may not.
-                    if (
-                        'calculations_ref' in results_quantities
-                        and results.calculations_ref
-                    ):
+                    if not trajectory_mapped and 'calculations_ref' in results_quantities and results.calculations_ref:
                         geo_opt.trajectory = results.calculations_ref
 
                     if (
                         'calculation_result_ref' in results_quantities
                         and results.calculation_result_ref
                     ):
-                        geo_opt.system_optimized = (
-                            results.calculation_result_ref.system_ref
-                        )
-                    geo_opt.energies = results
+                        if not geo_opt.system_optimized:
+                            geo_opt.system_optimized = (
+                                results.calculation_result_ref.system_ref
+                            )
 
                     if 'final_energy_difference' in results_quantities:
                         final_energy_difference = results.final_energy_difference

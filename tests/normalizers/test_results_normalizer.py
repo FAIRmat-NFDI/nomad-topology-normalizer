@@ -1278,6 +1278,90 @@ def test_data_schema_maps_geometry_optimization_workflow(archive_with_data_schem
     assert geometry_optimization.convergence_tolerance_force_maximum is not None
     assert geometry_optimization.final_energy_difference is not None
     assert geometry_optimization.final_force_maximum is not None
+    # Verify trajectory is mapped from data.outputs
+    assert geometry_optimization.trajectory is not None
+    assert len(geometry_optimization.trajectory) > 0
+    # Verify system_optimized is mapped
+    assert geometry_optimization.system_optimized is not None
+
+
+def test_data_schema_geometry_optimization_without_legacy_refs(
+    archive_with_data_schema,
+):
+    """Test geometry optimization mapping without legacy calculations_ref fields."""
+    workflow = SimGeometryOptimizationWorkflow()
+    workflow.method = SimGeometryOptimizationMethod(optimization_type='atomic')
+    workflow.method.convergence_targets = [
+        EnergyConvergenceTarget(threshold=1e-6 * ureg.eV),
+        ForceConvergenceTarget(threshold=1e-5 * ureg.newton),
+    ]
+    # Results without calculations_ref or calculation_result_ref
+    workflow.results = SimGeometryOptimizationResults(
+        final_energy_difference=2e-6 * ureg.eV,
+        final_force_maximum=4e-5 * ureg.newton,
+        final_displacement_maximum=1e-12 * ureg.meter,
+    )
+
+    archive_with_data_schema.workflow2 = workflow
+
+    normalizer = ResultsNormalizer()
+    normalizer.normalize(archive_with_data_schema, LOGGER)
+
+    geometry_optimization = archive_with_data_schema.results.properties.geometry_optimization
+    assert geometry_optimization is not None
+    assert geometry_optimization.type == 'atomic'
+    assert geometry_optimization.convergence_tolerance_energy_difference is not None
+    assert geometry_optimization.convergence_tolerance_force_maximum is not None
+    assert geometry_optimization.final_energy_difference is not None
+    assert geometry_optimization.final_force_maximum is not None
+    # Trajectory should be populated from data.outputs
+    assert geometry_optimization.trajectory is not None
+    assert len(geometry_optimization.trajectory) > 0
+
+
+def test_data_schema_geometry_optimization_with_method_tolerances(
+    archive_with_data_schema,
+):
+    """Test geometry optimization when tolerances are on method directly."""
+    workflow = SimGeometryOptimizationWorkflow()
+    method = SimGeometryOptimizationMethod(optimization_type='cell')
+    method.convergence_tolerance_energy_difference = 1e-7 * ureg.eV
+    method.convergence_tolerance_force_maximum = 1e-6 * ureg.newton
+    workflow.method = method
+    
+    workflow.results = SimGeometryOptimizationResults(
+        final_energy_difference=2e-7 * ureg.eV,
+        final_force_maximum=4e-6 * ureg.newton,
+    )
+
+    archive_with_data_schema.workflow2 = workflow
+
+    normalizer = ResultsNormalizer()
+    normalizer.normalize(archive_with_data_schema, LOGGER)
+
+    geometry_optimization = archive_with_data_schema.results.properties.geometry_optimization
+    assert geometry_optimization is not None
+    assert geometry_optimization.type == 'cell'
+    assert geometry_optimization.convergence_tolerance_energy_difference.magnitude == pytest.approx(1e-7)
+    assert geometry_optimization.convergence_tolerance_force_maximum.magnitude == pytest.approx(1e-6)
+    assert geometry_optimization.final_energy_difference.magnitude == pytest.approx(2e-7)
+    assert geometry_optimization.final_force_maximum.magnitude == pytest.approx(4e-6)
+
+
+def test_data_schema_geometry_optimization_detects_via_class_name(
+    archive_with_data_schema,
+):
+    """Test that geometry optimization is detected by workflow class name."""
+    workflow = SimGeometryOptimizationWorkflow()
+    # Workflow with no method or results, but class name should be enough
+    
+    archive_with_data_schema.workflow2 = workflow
+
+    normalizer = ResultsNormalizer()
+    normalizer.normalize(archive_with_data_schema, LOGGER)
+
+    geometry_optimization = archive_with_data_schema.results.properties.geometry_optimization
+    assert geometry_optimization is not None
 
 
 def test_data_schema_merges_electronic_payload_split_across_outputs(
