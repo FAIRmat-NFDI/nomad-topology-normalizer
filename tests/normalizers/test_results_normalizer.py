@@ -4,8 +4,13 @@ import numpy as np
 import pytest
 from nomad.datamodel import EntryArchive, EntryMetadata
 from nomad.datamodel.data import ArchiveSection
+from nomad.datamodel.results import (
+    DOSElectronic,
+    ElectronicProperties,
+    Properties,
+    Results,
+)
 from nomad.metainfo import Quantity
-from nomad.datamodel.results import DOSElectronic, ElectronicProperties, Properties, Results
 from nomad.units import ureg
 from nomad.utils import get_logger
 from nomad_simulations.schema_packages.atoms_state import AtomsState
@@ -18,8 +23,8 @@ from nomad_simulations.schema_packages.model_method import (
     ModelMethod,
     Wannier,
 )
-from nomad_simulations.schema_packages.numerical_settings import KSpace
 from nomad_simulations.schema_packages.model_system import ModelSystem
+from nomad_simulations.schema_packages.numerical_settings import KSpace
 from nomad_simulations.schema_packages.outputs import Outputs
 from nomad_simulations.schema_packages.properties import (
     AbsorptionSpectrum,
@@ -311,8 +316,7 @@ def test_data_schema_populates_method_from_simulation():
     assert archive.results.method.simulation.tb is not None
     assert archive.results.method.simulation.tb.type == 'Wannier'
     assert (
-        archive.results.method.simulation.tb.localization_type
-        == 'maximally_localized'
+        archive.results.method.simulation.tb.localization_type == 'maximally_localized'
     )
 
 
@@ -658,8 +662,12 @@ def test_data_schema_prefers_representative_system_outputs_for_electronic_proper
         positions=np.array([[0.0, 0.0, 0.0], [2.0, 0.0, 0.0]]) * ureg.angstrom,
         n_particles=2,
     )
-    other_system.particle_states.append(AtomsState(chemical_symbol='Ge', atomic_number=32))
-    other_system.particle_states.append(AtomsState(chemical_symbol='Ge', atomic_number=32))
+    other_system.particle_states.append(
+        AtomsState(chemical_symbol='Ge', atomic_number=32)
+    )
+    other_system.particle_states.append(
+        AtomsState(chemical_symbol='Ge', atomic_number=32)
+    )
     other_system.lattice_vectors = np.eye(3) * 5.43 * ureg.angstrom
     other_system.periodic_boundary_conditions = [True, True, True]
 
@@ -681,7 +689,9 @@ def test_data_schema_prefers_representative_system_outputs_for_electronic_proper
     output_other = Outputs()
     output_other.model_system_ref = other_system
     output_other.electronic_band_gaps.append(ElectronicBandGap(value=2.5 * ureg.eV))
-    band_structure_other = ElectronicBandStructure(value=np.array([[2.0, 2.1]]) * ureg.eV)
+    band_structure_other = ElectronicBandStructure(
+        value=np.array([[2.0, 2.1]]) * ureg.eV
+    )
     band_structure_other.k_path = _kline_path()
     output_other.electronic_band_structures.append(band_structure_other)
     simulation.outputs.append(output_other)
@@ -753,7 +763,10 @@ def test_data_schema_band_structure_mapping_creates_valid_segment_refs():
 
 
 def test_data_schema_band_structure_uses_numerical_settings_kline_path_fallback():
-    """Band mapping should fall back to model-method k_line_path when bs.k_path is missing."""
+    """Band mapping should fall back to model-method k_line_path.
+
+    This fallback is used when `bs.k_path` is missing.
+    """
     archive = EntryArchive(metadata=EntryMetadata())
     archive.results = Results()
     archive.results.properties = Properties()
@@ -803,7 +816,10 @@ def test_data_schema_band_structure_uses_numerical_settings_kline_path_fallback(
 
 
 def test_data_schema_band_structure_uses_kline_vertex_values_fallback():
-    """Band mapping should use high_symmetry_path_values when k_line points are missing."""
+    """Band mapping should use high_symmetry_path_values fallback.
+
+    This fallback is used when k_line points are missing.
+    """
     archive = EntryArchive(metadata=EntryMetadata())
     archive.results = Results()
     archive.results.properties = Properties()
@@ -852,9 +868,10 @@ def test_data_schema_band_structure_uses_kline_vertex_values_fallback():
     assert electronic.band_structure_electronic
     segments = electronic.band_structure_electronic[0].segment
     assert segments
-    assert np.array(segments[0].kpoints).shape[0] == np.array(
-        segments[0].energies.magnitude
-    ).shape[1]
+    assert (
+        np.array(segments[0].kpoints).shape[0]
+        == np.array(segments[0].energies.magnitude).shape[1]
+    )
 
 
 def test_data_schema_propagates_reference_energy_to_legacy_electronic_sections():
@@ -964,7 +981,10 @@ def test_data_schema_populates_deprecated_dos_mapping():
         assert electronic.dos_electronic
         assert len(getattr(archive, 'run', None) or []) == 1
         assert len(getattr(archive.run[0], 'calculation', None) or []) == 1
-        assert len(getattr(archive.run[0].calculation[0], 'dos_electronic', None) or []) == 1
+        assert (
+            len(getattr(archive.run[0].calculation[0], 'dos_electronic', None) or [])
+            == 1
+        )
     else:
         assert electronic is None or not electronic.dos_electronic_new
         assert electronic is None or not electronic.dos_electronic
@@ -1028,7 +1048,10 @@ def test_data_schema_populates_deprecated_dos_with_references():
     assert dos_ref.get('energies')
     assert dos_ref['energies'].startswith('/run/0/calculation/0/dos_electronic/')
     assert dos_ref.get('total')
-    assert all(ref.startswith('/run/0/calculation/0/dos_electronic/') for ref in dos_ref['total'])
+    assert all(
+        ref.startswith('/run/0/calculation/0/dos_electronic/')
+        for ref in dos_ref['total']
+    )
     assert len(getattr(archive, 'run', None) or []) == 1
 
 
@@ -1271,7 +1294,9 @@ def test_data_schema_maps_geometry_optimization_workflow(archive_with_data_schem
     normalizer = ResultsNormalizer()
     normalizer.normalize(archive_with_data_schema, LOGGER)
 
-    geometry_optimization = archive_with_data_schema.results.properties.geometry_optimization
+    geometry_optimization = (
+        archive_with_data_schema.results.properties.geometry_optimization
+    )
     assert geometry_optimization is not None
     assert geometry_optimization.type == 'atomic'
     assert geometry_optimization.convergence_tolerance_energy_difference is not None
@@ -1279,7 +1304,8 @@ def test_data_schema_maps_geometry_optimization_workflow(archive_with_data_schem
     assert geometry_optimization.final_energy_difference is not None
     assert geometry_optimization.final_force_maximum is not None
     # Note: Both trajectory and system_optimized cannot be populated from new schema
-    # They expect legacy runschema types (Calculation, System), not nomad-simulations (Outputs, ModelSystem)
+    # They expect legacy runschema types (Calculation, System), not
+    # nomad-simulations (Outputs, ModelSystem)
     # This is expected - convergence values are sufficient for new schema workflows
 
 
@@ -1305,14 +1331,17 @@ def test_data_schema_geometry_optimization_without_legacy_refs(
     normalizer = ResultsNormalizer()
     normalizer.normalize(archive_with_data_schema, LOGGER)
 
-    geometry_optimization = archive_with_data_schema.results.properties.geometry_optimization
+    geometry_optimization = (
+        archive_with_data_schema.results.properties.geometry_optimization
+    )
     assert geometry_optimization is not None
     assert geometry_optimization.type == 'atomic'
     assert geometry_optimization.convergence_tolerance_energy_difference is not None
     assert geometry_optimization.convergence_tolerance_force_maximum is not None
     assert geometry_optimization.final_energy_difference is not None
     assert geometry_optimization.final_force_maximum is not None
-    # Note: trajectory and system_optimized cannot be populated from new schema (type incompatibility)
+    # Note: trajectory and system_optimized cannot be populated from new
+    # schema (type incompatibility)
 
 
 def test_data_schema_geometry_optimization_with_method_tolerances(
@@ -1335,15 +1364,21 @@ def test_data_schema_geometry_optimization_with_method_tolerances(
     normalizer = ResultsNormalizer()
     normalizer.normalize(archive_with_data_schema, LOGGER)
 
-    geometry_optimization = archive_with_data_schema.results.properties.geometry_optimization
+    geometry_optimization = (
+        archive_with_data_schema.results.properties.geometry_optimization
+    )
     assert geometry_optimization is not None
     assert geometry_optimization.type == 'cell_shape'
+    assert geometry_optimization.convergence_tolerance_energy_difference.to(
+        ureg.eV
+    ).magnitude == pytest.approx(1e-7)
     assert (
-        geometry_optimization.convergence_tolerance_energy_difference.to(ureg.eV).magnitude
-        == pytest.approx(1e-7)
+        geometry_optimization.convergence_tolerance_force_maximum.magnitude
+        == pytest.approx(1e-6)
     )
-    assert geometry_optimization.convergence_tolerance_force_maximum.magnitude == pytest.approx(1e-6)
-    assert geometry_optimization.final_energy_difference.to(ureg.eV).magnitude == pytest.approx(2e-7)
+    assert geometry_optimization.final_energy_difference.to(
+        ureg.eV
+    ).magnitude == pytest.approx(2e-7)
     assert geometry_optimization.final_force_maximum.magnitude == pytest.approx(4e-6)
 
 
@@ -1359,7 +1394,9 @@ def test_data_schema_geometry_optimization_detects_via_class_name(
     normalizer = ResultsNormalizer()
     normalizer.normalize(archive_with_data_schema, LOGGER)
 
-    geometry_optimization = archive_with_data_schema.results.properties.geometry_optimization
+    geometry_optimization = (
+        archive_with_data_schema.results.properties.geometry_optimization
+    )
     assert geometry_optimization is not None
 
 

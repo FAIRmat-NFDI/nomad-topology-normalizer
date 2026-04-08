@@ -249,9 +249,7 @@ def test_topology_root_converts_unitless_geometry_to_meter_storage():
         positions=np.array([[0.0, 0.0, 0.0], [1.0, 2.0, 3.0]]),
         n_particles=2,
     )
-    root.lattice_vectors = np.array(
-        [[5.0, 0.0, 0.0], [0.0, 5.0, 0.0], [0.0, 0.0, 5.0]]
-    )
+    root.lattice_vectors = np.array([[5.0, 0.0, 0.0], [0.0, 5.0, 0.0], [0.0, 0.0, 5.0]])
     root.periodic_boundary_conditions = [True, True, True]
     root.particle_states.append(AtomsState(chemical_symbol='Si', atomic_number=14))
     root.particle_states.append(AtomsState(chemical_symbol='Si', atomic_number=14))

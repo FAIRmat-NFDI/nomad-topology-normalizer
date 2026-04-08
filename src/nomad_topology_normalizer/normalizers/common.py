@@ -26,6 +26,7 @@ from matid.symmetry.wyckoffset import (
 )
 from nomad import atomutils
 from nomad.config import config
+
 # System.atoms in results topology expects runschema.system.Atoms.
 try:
     from runschema.system import Atoms as NOMADAtoms
@@ -225,9 +226,17 @@ def nomad_atoms_from_ase_atoms(system: Atoms) -> NOMADAtoms:
         dtype=float,
     )
 
-    if positions_m.size and np.isfinite(positions_m).all() and np.nanmax(np.abs(positions_m)) > 1e-5:
+    if (
+        positions_m.size
+        and np.isfinite(positions_m).all()
+        and np.nanmax(np.abs(positions_m)) > 1e-5
+    ):
         positions_m = positions_m * 1e-10
-    if lattice_m.size and np.isfinite(lattice_m).all() and np.nanmax(np.abs(lattice_m)) > 1e-5:
+    if (
+        lattice_m.size
+        and np.isfinite(lattice_m).all()
+        and np.nanmax(np.abs(lattice_m)) > 1e-5
+    ):
         lattice_m = lattice_m * 1e-10
 
     atoms = NOMADAtoms()

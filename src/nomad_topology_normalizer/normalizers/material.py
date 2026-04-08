@@ -271,6 +271,7 @@ class MaterialNormalizer:
 
         # Lazy import to avoid circular dependency
         from nomad_topology_normalizer.normalizers.topology import TopologyNormalizer
+
         topology = TopologyNormalizer(
             self.entry_archive,
             self.repr_system,

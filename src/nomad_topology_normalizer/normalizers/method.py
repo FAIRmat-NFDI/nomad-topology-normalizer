@@ -424,9 +424,7 @@ class MethodNormalizer:  # TODO: add normalizer for atom_parameters.label
                 if not simulation.precision.k_line_density:
                     simulation.precision.k_line_density = k_line_density
 
-            for em_index, em in enumerate(
-                er := methods[-1].electrons_representation
-            ):
+            for em_index, em in enumerate(er := methods[-1].electrons_representation):
                 if (nt := em.native_tier) is not None:
                     try:
                         er[em_index].native_tier = f'{self.run.program.name} - {nt}'

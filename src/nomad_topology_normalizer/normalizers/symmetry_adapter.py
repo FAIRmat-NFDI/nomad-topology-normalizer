@@ -96,9 +96,7 @@ def from_model_system(model_system: Any) -> dict[str, Any]:
         prototype_formula=getattr(symmetry, 'prototype_formula', None),
         prototype_aflow_id=getattr(symmetry, 'prototype_aflow_id', None),
         origin_shift=getattr(symmetry, 'analysis_origin_shift', None),
-        transformation_matrix=getattr(
-            symmetry, 'analysis_transformation_matrix', None
-        ),
+        transformation_matrix=getattr(symmetry, 'analysis_transformation_matrix', None),
         wyckoff_letters=getattr(local_symmetry, 'wyckoff_letters', None),
         equivalent_atoms=getattr(local_symmetry, 'equivalent_atoms', None),
         site_multiplicities=getattr(local_symmetry, 'site_multiplicities', None),

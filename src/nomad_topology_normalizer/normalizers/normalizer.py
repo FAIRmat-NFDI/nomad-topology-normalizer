@@ -88,7 +88,9 @@ class Normalizer:
             except Exception:
                 rep_idx = None
             # Handle negative index (e.g., -1 for last element)
-            if rep_idx is not None and (-len(model_systems) <= rep_idx < len(model_systems)):
+            if rep_idx is not None and (
+                -len(model_systems) <= rep_idx < len(model_systems)
+            ):
                 result = model_systems[rep_idx]
 
         # Fallback: find system with is_representative flag

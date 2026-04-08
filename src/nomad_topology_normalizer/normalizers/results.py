@@ -89,8 +89,8 @@ from nomad.atomutils import Formula
 from nomad.config import config
 from nomad.datamodel import EntryArchive
 from nomad.datamodel.data import ArchiveSection
-from nomad.datamodel.metainfo.workflow import Workflow
 from nomad.datamodel.metainfo.simulation.calculation import BandEnergies
+from nomad.datamodel.metainfo.workflow import Workflow
 from nomad.datamodel.results import (
     BSE,
     DFT,
@@ -149,8 +149,8 @@ from nomad.utils import extract_section, traverse_reversed
 
 # Import runschema for DOS compatibility mapping
 try:
-    import runschema.run
     import runschema.calculation
+    import runschema.run
 except ImportError:
     runschema = None
 
@@ -530,10 +530,7 @@ class ResultsNormalizerBase:
                     simulation.tb = TB()
                 tb_type = model_method.type
                 tb_type_enum = _enum_values(TB, 'type')
-                if (
-                    tb_type not in tb_type_enum
-                    and section_method_type in tb_type_enum
-                ):
+                if tb_type not in tb_type_enum and section_method_type in tb_type_enum:
                     tb_type = section_method_type
                 if tb_type is not None:
                     _set_if_enum(simulation.tb, 'type', tb_type)
@@ -551,12 +548,8 @@ class ResultsNormalizerBase:
                 _set_if_enum(simulation.gw, 'basis_set_type', gw_basis)
             elif method_type == 'BSE' and simulation.bse is None:
                 simulation.bse = BSE()
-                _set_if_enum(
-                    simulation.bse, 'type', model_method.type
-                )
-                _set_if_enum(
-                    simulation.bse, 'solver', model_method.solver
-                )
+                _set_if_enum(simulation.bse, 'type', model_method.type)
+                _set_if_enum(simulation.bse, 'solver', model_method.solver)
                 bse_basis = _basis_set_type_from_model_method(
                     model_method, simulation.program_name
                 )
@@ -600,7 +593,9 @@ class ResultsNormalizerBase:
         if simulation.bse is not None:
             _map_excited_state_starting_point(simulation.bse, simulation.dft)
 
-    def _map_dos_data(self, dos_section, output_index: int, dos_index: int) -> dict | None:
+    def _map_dos_data(
+        self, dos_section, output_index: int, dos_index: int
+    ) -> dict | None:
         """Map one ElectronicDensityOfStates into DOSElectronic-compatible refs."""
         energies = dos_section.energies
         energies_points = energies.points if energies is not None else None
@@ -615,9 +610,10 @@ class ResultsNormalizerBase:
 
         spin_ch = dos_section.spin_channel or 0
         has_projected = bool(dos_section.projected_dos)
+        dos_base_ref = f'/data/outputs/{output_index}/electronic_dos/{dos_index}'
         return {
-            'energies_ref': f'/data/outputs/{output_index}/electronic_dos/{dos_index}/energies/points',
-            'total_ref': f'/data/outputs/{output_index}/electronic_dos/{dos_index}',
+            'energies_ref': f'{dos_base_ref}/energies/points',
+            'total_ref': dos_base_ref,
             'spin_channel': spin_ch,
             'has_projected': has_projected,
             'energies_points': energies_points,
@@ -625,7 +621,10 @@ class ResultsNormalizerBase:
         }
 
     def _ensure_legacy_run_calculation(self, archive: EntryArchive):
-        """Ensure archive.run[0].calculation[0] exists for DOS compatibility payloads."""
+        """Ensure archive.run[0].calculation[0] exists.
+
+        Used for DOS compatibility payloads.
+        """
         if not runschema:
             return None
 
@@ -646,7 +645,9 @@ class ResultsNormalizerBase:
 
         return calculation
 
-    def _map_band_structure(self, band_structure_section) -> BandStructureElectronic | None:
+    def _map_band_structure(
+        self, band_structure_section
+    ) -> BandStructureElectronic | None:
         """Map one ElectronicBandStructure into results BandStructureElectronic."""
         values = band_structure_section.value
         if values is None:
@@ -761,9 +762,7 @@ class ResultsNormalizerBase:
             band_structure.m_add_sub_section(BandStructureElectronic.band_gap, band_gap)
         return band_structure
 
-    def _map_greens_functions(
-        self, output_section
-    ) -> GreensFunctionsElectronic | None:
+    def _map_greens_functions(self, output_section) -> GreensFunctionsElectronic | None:
         """Map Green's function outputs into GreensFunctionsElectronic."""
 
         def _to_array_quantity(value):
@@ -820,8 +819,7 @@ class ResultsNormalizerBase:
                     )
                     continue
                 mapped = (
-                    _safe_set(legacy_gf, 'matsubara_freq', matsubara_points)
-                    or mapped
+                    _safe_set(legacy_gf, 'matsubara_freq', matsubara_points) or mapped
                 )
                 greens_value = _to_array_quantity(greens.value)
                 if greens_value is None:
@@ -855,7 +853,7 @@ class ResultsNormalizerBase:
                     or mapped
                 )
 
-        for self_energy in (output_section.electronic_self_energies or []):
+        for self_energy in output_section.electronic_self_energies or []:
             if (
                 self_energy.matsubara_frequency is not None
                 and valid_array(self_energy.matsubara_frequency.points)
@@ -906,7 +904,7 @@ class ResultsNormalizerBase:
                     or mapped
                 )
 
-        for hybridization in (output_section.hybridization_functions or []):
+        for hybridization in output_section.hybridization_functions or []:
             if (
                 hybridization.matsubara_frequency is not None
                 and valid_array(hybridization.matsubara_frequency.points)
@@ -959,17 +957,12 @@ class ResultsNormalizerBase:
                 )
 
         for qp_weight in output_section.quasiparticle_weights or []:
-            if qp_weight.value is not None and valid_array(
-                np.array(qp_weight.value)
-            ):
+            if qp_weight.value is not None and valid_array(np.array(qp_weight.value)):
                 legacy_gf.quasiparticle_weights = qp_weight.value
                 mapped = True
 
         chemical_potentials = output_section.chemical_potentials or []
-        if (
-            chemical_potentials
-            and chemical_potentials[0].value is not None
-        ):
+        if chemical_potentials and chemical_potentials[0].value is not None:
             legacy_gf.chemical_potential = chemical_potentials[0].value
             mapped = True
 
@@ -1083,7 +1076,10 @@ class ResultsNormalizerBase:
                     return False
                 if not isinstance(totals, (list, tuple)) or not totals:
                     return False
-                if any(not isinstance(total_ref, str) or not total_ref for total_ref in totals):
+                if any(
+                    not isinstance(total_ref, str) or not total_ref
+                    for total_ref in totals
+                ):
                     return False
                 return True
 
@@ -1130,9 +1126,7 @@ class ResultsNormalizerBase:
         if not outputs:
             return
 
-        had_dos_input = any(
-            len(output.electronic_dos or []) > 0 for output in outputs
-        )
+        had_dos_input = any(len(output.electronic_dos or []) > 0 for output in outputs)
 
         # Keep legacy-equivalent behavior: electronic properties should represent
         # the latest relevant output payload, while trajectory/spectra can aggregate.
@@ -1221,7 +1215,9 @@ class ResultsNormalizerBase:
                 has_projected = has_projected or mapped['has_projected']
 
             if dos_data_sections:
-                totals = [d['total_ref'] for d in dos_data_sections if d.get('total_ref')]
+                totals = [
+                    d['total_ref'] for d in dos_data_sections if d.get('total_ref')
+                ]
                 if totals:
                     dos_result = DOSElectronic()
                     dos_result.energies = dos_data_sections[0]['energies_ref']
@@ -1234,7 +1230,7 @@ class ResultsNormalizerBase:
                         dos_result.m_add_sub_section(DOSElectronic.band_gap, dos_bg)
                     output_dos_sections.append(dos_result)
 
-            for band_structure in (output.electronic_band_structures or []):
+            for band_structure in output.electronic_band_structures or []:
                 mapped_band_structure = self._map_band_structure(band_structure)
                 if mapped_band_structure:
                     output_band_structures.append(mapped_band_structure)
@@ -1274,7 +1270,12 @@ class ResultsNormalizerBase:
             if mapped_greens_functions:
                 output_greens_functions.append(mapped_greens_functions)
 
-            if output_band_gaps or output_dos_sections or output_band_structures or output_greens_functions:
+            if (
+                output_band_gaps
+                or output_dos_sections
+                or output_band_structures
+                or output_greens_functions
+            ):
                 output_system_ref = output.model_system_ref
                 score = (
                     1
@@ -1285,17 +1286,22 @@ class ResultsNormalizerBase:
 
                 # Select the best source independently per electronic property
                 # so split-output payloads are merged instead of overwritten.
-                if output_band_gaps and (score > best_band_gap_score or score == best_band_gap_score):
+                if output_band_gaps and (
+                    score > best_band_gap_score or score == best_band_gap_score
+                ):
                     best_band_gap_score = score
                     latest_band_gaps = output_band_gaps
 
-                if output_dos_sections and (score > best_dos_score or score == best_dos_score):
+                if output_dos_sections and (
+                    score > best_dos_score or score == best_dos_score
+                ):
                     best_dos_score = score
                     latest_dos_sections = output_dos_sections
                     latest_dos_payload = dos_data_sections
 
                 if output_band_structures and (
-                    score > best_band_structure_score or score == best_band_structure_score
+                    score > best_band_structure_score
+                    or score == best_band_structure_score
                 ):
                     best_band_structure_score = score
                     latest_band_structures = output_band_structures
@@ -1334,7 +1340,9 @@ class ResultsNormalizerBase:
             energy_source = (
                 potential_energies[0]
                 if potential_energies
-                else total_energies[0] if total_energies else None
+                else total_energies[0]
+                if total_energies
+                else None
             )
             if energy_source is not None and energy_source.value is not None:
                 potential_energy_series.append(float(energy_source.value.magnitude))
@@ -1351,10 +1359,11 @@ class ResultsNormalizerBase:
             or potential_energy_series
         ):
             if had_dos_input:
-                self.logger.warning(
-                    'Skipping DOS mapping for results.properties.electronic.dos_electronic: '
-                    'could not build payload from v2 outputs.'
+                dos_warning = (
+                    'Skipping DOS mapping for results.properties.electronic.'
+                    'dos_electronic: could not build payload from v2 outputs.'
                 )
+                self.logger.warning(dos_warning)
             return
 
         has_electronic_payload = bool(
@@ -1385,7 +1394,9 @@ class ResultsNormalizerBase:
                         f'/run/0/calculation/0/dos_electronic/{idx}/total/0'
                     )
 
-                latest_dos_sections[0].energies = '/run/0/calculation/0/dos_electronic/0/energies'
+                latest_dos_sections[
+                    0
+                ].energies = '/run/0/calculation/0/dos_electronic/0/energies'
                 latest_dos_sections[0].total = run_total_refs
 
         # `results.properties.electronic.band_structure_electronic.segment` is a
@@ -1492,10 +1503,11 @@ class ResultsNormalizerBase:
                 )
 
         if had_dos_input and not latest_dos_sections:
-            self.logger.warning(
-                'Skipping DOS mapping for results.properties.electronic.dos_electronic: '
-                'could not build payload from v2 outputs.'
+            dos_warning = (
+                'Skipping DOS mapping for results.properties.electronic.'
+                'dos_electronic: could not build payload from v2 outputs.'
             )
+            self.logger.warning(dos_warning)
 
         self._log_unmapped_output_groups(outputs)
 
@@ -2339,26 +2351,36 @@ class ResultsNormalizerBase:
                 or has_geo_results
             ):
                 geo_opt = GeometryOptimization()
-                
-                # KNOWN LIMITATION: Trajectory visualization unavailable for new schema workflows
+
+                # KNOWN LIMITATION:
+                # Trajectory visualization unavailable for new schema workflows.
                 # Both trajectory and system_optimized expect legacy runschema types:
-                # - trajectory: runschema.calculation.Calculation (not nomad-simulations Outputs)
-                # - system_optimized: runschema.system.System (not nomad-simulations ModelSystem)
-                # 
-                # Attempting to assign nomad-simulations sections to these fields raises TypeError.
-                # Migration policy decision: Skip compatibility population cleanly rather than
+                # - trajectory: runschema.calculation.Calculation
+                #   (not nomad-simulations Outputs)
+                # - system_optimized: runschema.system.System
+                #   (not nomad-simulations ModelSystem)
+                #
+                # Assigning nomad-simulations sections to these fields raises
+                # TypeError.
+                # Migration policy decision: Skip compatibility population
+                # cleanly rather than
                 # mixing schema types or creating complex translation layers.
                 #
-                # Impact: GUI geometry optimization trajectory graph (energy vs steps) will show
-                # "no data" for new schema workflows. Only convergence values are populated.
+                # Impact: GUI geometry optimization trajectory graph
+                # (energy vs steps) will show "no data" for new schema
+                # workflows. Only convergence values are populated.
                 #
-                # Resolution: GUI must be updated to read from archive.data.outputs directly.
+                # Resolution: GUI must be updated to read from
+                # archive.data.outputs directly.
                 # See dev_notes/MIGRATION_STATUS.md "Known Limitations" section.
-                
+
                 if results:
                     results_quantities = results.m_def.all_quantities
                     # Legacy workflow schemas expose calculation references
-                    if 'calculations_ref' in results_quantities and results.calculations_ref:
+                    if (
+                        'calculations_ref' in results_quantities
+                        and results.calculations_ref
+                    ):
                         geo_opt.trajectory = results.calculations_ref
 
                     if (
@@ -2383,7 +2405,9 @@ class ResultsNormalizerBase:
                     if 'final_displacement_maximum' in results_quantities:
                         final_displacement_maximum = results.final_displacement_maximum
                         if final_displacement_maximum is not None:
-                            geo_opt.final_displacement_maximum = final_displacement_maximum
+                            geo_opt.final_displacement_maximum = (
+                                final_displacement_maximum
+                            )
                 if method is not None:
                     method_quantities = method.m_def.all_quantities
                     method_sub_sections = method.m_def.all_sub_sections
@@ -2393,9 +2417,13 @@ class ResultsNormalizerBase:
 
                     energy_tolerance = None
                     if 'convergence_tolerance_energy_difference' in method_quantities:
-                        energy_tolerance = method.convergence_tolerance_energy_difference
+                        energy_tolerance = (
+                            method.convergence_tolerance_energy_difference
+                        )
                     elif hasattr(method, 'convergence_tolerance_energy_difference'):
-                        energy_tolerance = method.convergence_tolerance_energy_difference
+                        energy_tolerance = (
+                            method.convergence_tolerance_energy_difference
+                        )
 
                     force_tolerance = None
                     if 'convergence_tolerance_force_maximum' in method_quantities:
