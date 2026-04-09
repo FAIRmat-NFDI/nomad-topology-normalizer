@@ -525,8 +525,40 @@ class TopologyNormalizer(Normalizer):
     def topology_calculation(self) -> list[System] | None:
         """Extracts the system topology as defined in the original calculation."""
         system = None
+        model_systems = None
         groups = None
         result = None
+
+        def _has_topology_payload(candidate: SystemV2 | None) -> bool:
+            if not isinstance(candidate, SystemV2):
+                return False
+            try:
+                candidate_groups = candidate.sub_systems
+            except Exception:
+                return False
+            positions = getattr(candidate, 'positions', None)
+            particle_states = getattr(candidate, 'particle_states', None)
+            return bool(
+                candidate_groups
+                and len(candidate_groups) > 0
+                and positions is not None
+                and len(positions) > 0
+                and particle_states
+                and len(particle_states) > 0
+            )
+
+        data = self.entry_archive.data
+        try:
+            if data and isinstance(
+                data,
+                __import__(
+                    'nomad_simulations.schema_packages.general',
+                    fromlist=['Simulation'],
+                ).Simulation,
+            ):
+                model_systems = data.model_system
+        except Exception:
+            model_systems = None
 
         # Prefer the already resolved representative system. This keeps
         # topology/root structure payload aligned with the system selected for
@@ -534,26 +566,23 @@ class TopologyNormalizer(Normalizer):
         if isinstance(self.repr_system, SystemV2):
             system = self.repr_system
 
-        # Fallback to first model_system for safety if representative resolution
-        # is unavailable.
-        if system is None:
-            data = self.entry_archive.data
-            try:
-                if (
-                    data
-                    and isinstance(
-                        data,
-                        __import__(
-                            'nomad_simulations.schema_packages.general',
-                            fromlist=['Simulation'],
-                        ).Simulation,
-                    )
-                    and data.model_system
-                    and len(data.model_system) > 0
-                ):
-                    system = data.model_system[0]
-            except (AttributeError, IndexError):
-                pass
+        # If representative system does not carry parser hierarchy payload
+        # (common for trajectory-frame representatives), fallback to a
+        # topology-bearing model_system.
+        if not _has_topology_payload(system) and model_systems:
+            system = next(
+                (
+                    model_system
+                    for model_system in model_systems
+                    if _has_topology_payload(model_system)
+                ),
+                None,
+            )
+
+        # Fallback to first model_system for safety if no topology-bearing
+        # system is available.
+        if system is None and model_systems and len(model_systems) > 0:
+            system = model_systems[0]
 
         # Validate system type and extract groups
         if system and isinstance(system, SystemV2):
@@ -562,18 +591,10 @@ class TopologyNormalizer(Normalizer):
             except Exception:
                 pass
 
-            positions = getattr(system, 'positions', None)
             particle_states = getattr(system, 'particle_states', None)
 
             # Validate system has required data
-            has_valid_data = (
-                groups
-                and len(groups) > 0
-                and positions is not None
-                and len(positions) > 0
-                and particle_states
-                and len(particle_states) > 0
-            )
+            has_valid_data = _has_topology_payload(system)
 
             if has_valid_data:
                 topology: dict[str, System] = {}

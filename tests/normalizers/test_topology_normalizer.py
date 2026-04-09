@@ -201,6 +201,64 @@ def test_topology_calculation_prefers_representative_system():
     assert original.n_atoms == 2
 
 
+def test_topology_calculation_falls_back_to_topology_bearing_model_system():
+    archive = EntryArchive(metadata=EntryMetadata())
+
+    topology_system = ModelSystem(
+        name='topology_system',
+        type='molecule',
+        is_representative=False,
+        positions=np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]]) * ureg.angstrom,
+        n_particles=2,
+    )
+    topology_system.particle_states.append(
+        AtomsState(chemical_symbol='H', atomic_number=1)
+    )
+    topology_system.particle_states.append(
+        AtomsState(chemical_symbol='H', atomic_number=1)
+    )
+    topology_system.sub_systems.append(
+        ModelSystem(
+            name='molecule',
+            branch_label='molecule',
+            particle_indices=np.array([0, 1], dtype=np.int32),
+        )
+    )
+
+    representative_frame = ModelSystem(
+        name='trajectory_frame',
+        type='molecule',
+        is_representative=True,
+        positions=np.array([[0.1, 0.0, 0.0], [1.1, 0.0, 0.0]]) * ureg.angstrom,
+        n_particles=2,
+    )
+    representative_frame.particle_states.append(
+        AtomsState(chemical_symbol='H', atomic_number=1)
+    )
+    representative_frame.particle_states.append(
+        AtomsState(chemical_symbol='H', atomic_number=1)
+    )
+
+    simulation = Simulation()
+    simulation.model_system.append(topology_system)
+    simulation.model_system.append(representative_frame)
+    simulation.representative_system_index = 1
+    archive.data = simulation
+    archive.results = Results()
+    archive.results.material = Material()
+
+    normalizer = TopologyNormalizer()
+    normalizer.normalize(archive, LOGGER)
+
+    topology = archive.results.material.topology
+    assert topology is not None
+    assert len(topology) > 1
+    original = topology[0]
+    assert original.label == 'original'
+    assert original.n_atoms == 2
+    assert any(section.label == 'molecule' for section in topology)
+
+
 def test_topology_root_normalizes_atomic_numbers_from_symbol_and_nat():
     archive = EntryArchive(metadata=EntryMetadata())
 
