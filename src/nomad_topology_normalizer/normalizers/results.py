@@ -718,7 +718,7 @@ class ResultsNormalizerBase:
             except Exception:
                 numerical_settings = None
             for setting in numerical_settings or []:
-                k_line_path = setting.k_line_path
+                k_line_path = getattr(setting, 'k_line_path', None)
                 k_points = k_line_path.points if k_line_path is not None else None
                 if not valid_array(k_points):
                     # Some parsers expose only vertex path values without the

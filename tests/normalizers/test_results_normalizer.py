@@ -24,7 +24,7 @@ from nomad_simulations.schema_packages.model_method import (
     Wannier,
 )
 from nomad_simulations.schema_packages.model_system import ModelSystem
-from nomad_simulations.schema_packages.numerical_settings import KSpace
+from nomad_simulations.schema_packages.numerical_settings import KSpace, Smearing
 from nomad_simulations.schema_packages.outputs import Outputs
 from nomad_simulations.schema_packages.properties import (
     AbsorptionSpectrum,
@@ -812,6 +812,56 @@ def test_data_schema_band_structure_uses_numerical_settings_kline_path_fallback(
     segments = electronic.band_structure_electronic[0].segment
     assert segments
     assert segments[0].m_def.name != 'EntryArchive'
+    assert np.array(segments[0].kpoints).shape[0] > 0
+
+
+def test_data_schema_band_structure_skips_non_kspace_numerical_settings():
+    """Fallback search should ignore numerical settings without `k_line_path`."""
+    archive = EntryArchive(metadata=EntryMetadata())
+    archive.results = Results()
+    archive.results.properties = Properties()
+
+    simulation = Simulation()
+    simulation.program = Program(name='VASP')
+
+    dft = DFT()
+    dft.numerical_settings.append(Smearing())
+    k_space = KSpace()
+    k_space.k_line_path = _kline_path()
+    dft.numerical_settings.append(k_space)
+    simulation.model_method.append(dft)
+
+    model_system = ModelSystem(
+        name='test_system',
+        type='bulk',
+        is_representative=True,
+        positions=np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]]) * ureg.angstrom,
+        n_particles=2,
+    )
+    model_system.particle_states.append(
+        AtomsState(chemical_symbol='Si', atomic_number=14)
+    )
+    model_system.particle_states.append(
+        AtomsState(chemical_symbol='Si', atomic_number=14)
+    )
+    model_system.lattice_vectors = np.eye(3) * 5.43 * ureg.angstrom
+    model_system.periodic_boundary_conditions = [True, True, True]
+    simulation.model_system.append(model_system)
+
+    output = Outputs()
+    band_structure = ElectronicBandStructure(value=np.array([[1.0, 1.1]]) * ureg.eV)
+    output.electronic_band_structures.append(band_structure)
+    simulation.outputs.append(output)
+    archive.data = simulation
+
+    normalizer = ResultsNormalizer()
+    normalizer.normalize(archive, LOGGER)
+
+    electronic = archive.results.properties.electronic
+    assert electronic is not None
+    assert electronic.band_structure_electronic
+    segments = electronic.band_structure_electronic[0].segment
+    assert segments
     assert np.array(segments[0].kpoints).shape[0] > 0
 
 
