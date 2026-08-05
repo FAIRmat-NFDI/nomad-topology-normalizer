@@ -55,6 +55,7 @@ from nomad_simulations.schema_packages.properties import (
 from nomad_simulations.schema_packages.variables import (
     Energy2,
     Frequency,
+    ImaginaryTime,
     KLinePath,
     MatsubaraFrequency,
 )
@@ -1459,6 +1460,34 @@ def test_greens_mapping_does_not_create_axis_only_result():
     normalizer.logger = LOGGER
 
     assert normalizer._map_greens_functions(output) is None
+
+
+def test_greens_mapping_recovers_from_incompatible_payload_shape(caplog):
+    if 'tau' not in GreensFunctionsElectronic.m_def.all_quantities:
+        pytest.skip('legacy Green functions fields unavailable')
+
+    greens = SimpleNamespace(
+        imaginary_time=ImaginaryTime(points=np.array([0.0, 1.0]) * ureg.s),
+        matsubara_frequency=None,
+        real_frequency=None,
+        value=np.array([1.0, 2.0]) / ureg.eV,
+    )
+    output = SimpleNamespace(
+        electronic_greens_functions=[greens],
+        electronic_self_energies=[],
+        hybridization_functions=[],
+        quasiparticle_weights=[],
+        chemical_potentials=[],
+    )
+    normalizer = ResultsNormalizer()
+    normalizer.logger = LOGGER
+
+    caplog.clear()
+    assert normalizer._map_greens_functions(output) is None
+    assert any(
+        'skipping incompatible greens axis/payload pair' in record.message
+        for record in caplog.records
+    )
 
 
 def test_data_schema_logs_unmapped_output_groups(archive_with_data_schema, caplog):
