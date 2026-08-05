@@ -74,7 +74,7 @@ from nomad_simulations.schema_packages.workflow.geometry_optimization import (
 )
 
 from nomad_topology_normalizer.normalizers.results import (
-    V2_COMPATIBILITY_RUN_ID,
+    V2_COMPATIBILITY_ANNOTATION,
 )
 from nomad_topology_normalizer.normalizers.results import (
     ResultsNormalizerBase as ResultsNormalizer,
@@ -1320,7 +1320,7 @@ def test_data_schema_does_not_merge_different_method_outputs(
 
     electronic = archive_with_data_schema.results.properties.electronic
     assert electronic.band_structure_electronic
-    assert electronic.band_structure_electronic[0].label.endswith(':GW')
+    assert electronic.band_structure_electronic[0].label == 'GW'
     assert not electronic.dos_electronic
 
 
@@ -1383,7 +1383,8 @@ def test_data_schema_preserves_legacy_calculation_and_result_sections():
     assert archive.run[0] is legacy_run
     assert legacy_calculation.dos_electronic[0] is legacy_dos
     assert legacy_calculation.band_structure_electronic[0] is legacy_band_structure
-    assert archive.run[1].raw_id == V2_COMPATIBILITY_RUN_ID
+    assert archive.run[1].raw_id is None
+    assert V2_COMPATIBILITY_ANNOTATION in archive.run[1].m_annotations
     assert any(section.label == 'parser-owned' for section in electronic.dos_electronic)
     assert any(
         section.label == 'parser-owned'
@@ -1397,14 +1398,16 @@ def test_data_schema_preserves_legacy_calculation_and_result_sections():
         for section in serialized['results']['properties']['electronic'][
             'dos_electronic'
         ]
-        if section.get('label', '').startswith('nomad-topology-normalizer:')
+        if V2_COMPATIBILITY_ANNOTATION in section.get('m_annotations', {})
     )
+    assert generated_dos.get('label') is None
     assert generated_dos['energies'].startswith('/run/1/calculation/0/')
     assert all(
         ref.startswith('/run/1/calculation/0/') for ref in generated_dos['total']
     )
     assert archive.m_resolve(generated_dos['energies']) is not None
     assert all(archive.m_resolve(ref) is not None for ref in generated_dos['total'])
+    assert 'nomad-topology-normalizer:v2-compatibility' not in repr(serialized)
 
 
 def test_data_schema_output_mapping_is_idempotent(archive_with_data_schema):
@@ -1425,6 +1428,17 @@ def test_data_schema_output_mapping_is_idempotent(archive_with_data_schema):
         len(properties.thermodynamic.trajectory),
     )
     first_time = properties.thermodynamic.trajectory[0].temperature.time.copy()
+
+    assert V2_COMPATIBILITY_ANNOTATION in (
+        properties.spectroscopic.spectra[0].m_annotations
+    )
+    assert V2_COMPATIBILITY_ANNOTATION in (
+        properties.structural.radius_of_gyration[0].m_annotations
+    )
+    assert V2_COMPATIBILITY_ANNOTATION in (
+        properties.thermodynamic.trajectory[0].m_annotations
+    )
+    assert properties.thermodynamic.trajectory[0].provenance is None
 
     normalizer.normalize(archive_with_data_schema, LOGGER)
 

@@ -163,8 +163,12 @@ from nomad_topology_normalizer.normalizers.method import MethodNormalizer
 re_label = re.compile('^([a-zA-Z][a-zA-Z]?)[^a-zA-Z]*')
 elements = set(ase.data.chemical_symbols)
 
-V2_COMPATIBILITY_LABEL = 'nomad-topology-normalizer:v2-compatibility'
-V2_COMPATIBILITY_RUN_ID = f'{V2_COMPATIBILITY_LABEL}:run'
+V2_COMPATIBILITY_ANNOTATION = 'nomad_topology_normalizer_v2_compatibility'
+
+# Recognize sections written by the first compatibility implementation so that
+# one normalization pass migrates them to the invisible annotation marker.
+_LEGACY_V2_COMPATIBILITY_LABEL = 'nomad-topology-normalizer:v2-compatibility'
+_LEGACY_V2_COMPATIBILITY_RUN_ID = f'{_LEGACY_V2_COMPATIBILITY_LABEL}:run'
 
 
 def valid_array(array: Any) -> bool:
@@ -628,22 +632,42 @@ class ResultsNormalizerBase:
         }
 
     @staticmethod
-    def _compatibility_label(model_method_ref=None) -> str:
-        method_name = getattr(getattr(model_method_ref, 'm_def', None), 'name', None)
-        if method_name:
-            return f'{V2_COMPATIBILITY_LABEL}:{method_name}'
-        return V2_COMPATIBILITY_LABEL
+    def _method_label(model_method_ref=None) -> str | None:
+        """Return scientific method provenance without an ownership marker."""
+        return getattr(
+            getattr(model_method_ref, 'm_def', None), 'name', None
+        ) or getattr(
+            model_method_ref,
+            'name',
+            None,
+        )
+
+    @staticmethod
+    def _mark_compatibility_section(section):
+        """Mark a generated section without changing user-facing quantities."""
+        section.m_annotations[V2_COMPATIBILITY_ANNOTATION] = {'generated': True}
+        return section
 
     @staticmethod
     def _is_compatibility_section(section) -> bool:
         try:
+            if V2_COMPATIBILITY_ANNOTATION in section.m_annotations:
+                return True
+
+            # Backward-compatible cleanup for archives produced by the initial
+            # visible-marker implementation. New sections never use these fields.
+            raw_id = getattr(section, 'raw_id', None)
+            if raw_id == _LEGACY_V2_COMPATIBILITY_RUN_ID:
+                return True
             label = getattr(section, 'label', None)
-            if isinstance(label, str) and label.startswith(V2_COMPATIBILITY_LABEL):
+            if isinstance(label, str) and label.startswith(
+                _LEGACY_V2_COMPATIBILITY_LABEL
+            ):
                 return True
             provenance = getattr(section, 'provenance', None)
             provenance_label = getattr(provenance, 'label', None)
             return isinstance(provenance_label, str) and provenance_label.startswith(
-                V2_COMPATIBILITY_LABEL
+                _LEGACY_V2_COMPATIBILITY_LABEL
             )
         except Exception:
             return False
@@ -693,6 +717,10 @@ class ResultsNormalizerBase:
                 if not self._is_compatibility_section(section)
             ]
 
+        geometry_optimization = properties.geometry_optimization
+        if self._is_compatibility_section(geometry_optimization):
+            properties.geometry_optimization = None
+
     def _ensure_legacy_run_calculation(
         self, archive: EntryArchive
     ) -> tuple[Any, int, int] | None:
@@ -705,13 +733,18 @@ class ResultsNormalizerBase:
             (
                 candidate
                 for candidate in runs
-                if getattr(candidate, 'raw_id', None) == V2_COMPATIBILITY_RUN_ID
+                if self._is_compatibility_section(candidate)
             ),
             None,
         )
         if run is None:
-            run = runschema.run.Run(raw_id=V2_COMPATIBILITY_RUN_ID)
+            run = runschema.run.Run()
+            self._mark_compatibility_section(run)
             archive.run.append(run)
+        else:
+            self._mark_compatibility_section(run)
+            if getattr(run, 'raw_id', None) == _LEGACY_V2_COMPATIBILITY_RUN_ID:
+                run.m_set('raw_id', None)
 
         calculations = run.calculation
         if calculations and len(calculations) > 0:
@@ -719,6 +752,7 @@ class ResultsNormalizerBase:
         else:
             calculation = runschema.calculation.Calculation()
             run.calculation.append(calculation)
+        self._mark_compatibility_section(calculation)
 
         return (
             calculation,
@@ -1163,12 +1197,16 @@ class ResultsNormalizerBase:
         self._remove_generated_compatibility_results(properties)
         if runschema:
             for compatibility_run in archive.run or []:
+                if not self._is_compatibility_section(compatibility_run):
+                    continue
+                self._mark_compatibility_section(compatibility_run)
                 if (
                     getattr(compatibility_run, 'raw_id', None)
-                    != V2_COMPATIBILITY_RUN_ID
+                    == _LEGACY_V2_COMPATIBILITY_RUN_ID
                 ):
-                    continue
+                    compatibility_run.m_set('raw_id', None)
                 for compatibility_calculation in compatibility_run.calculation or []:
+                    self._mark_compatibility_section(compatibility_calculation)
                     compatibility_calculation.dos_electronic = []
                     compatibility_calculation.band_structure_electronic = []
 
@@ -1177,6 +1215,7 @@ class ResultsNormalizerBase:
         # no electronic/spectroscopic payload in outputs.
         geometry_optimization = self.geometry_optimization()
         if geometry_optimization is not None:
+            self._mark_compatibility_section(geometry_optimization)
             properties.geometry_optimization = geometry_optimization
 
         try:
@@ -1235,7 +1274,7 @@ class ResultsNormalizerBase:
             output_highest_occupied = None
             output_system_ref = output.model_system_ref
             output_method_ref = output.model_method_ref
-            compatibility_label = self._compatibility_label(output_method_ref)
+            method_label = self._method_label(output_method_ref)
 
             for band_structure in output.electronic_band_structures or []:
                 output_highest_occupied = band_structure.highest_occupied
@@ -1258,10 +1297,10 @@ class ResultsNormalizerBase:
                 bg_result = BandGap()
                 bg_result.value = bg.value
                 bg_result.type = bg.type
-                if runschema:
+                if runschema and method_label:
                     bg_result.provenance = (
                         runschema.calculation.ElectronicStructureProvenance(
-                            label=compatibility_label
+                            label=method_label
                         )
                     )
                 if output_highest_occupied is not None:
@@ -1286,7 +1325,7 @@ class ResultsNormalizerBase:
                 ]
                 if totals:
                     dos_result = DOSElectronic()
-                    dos_result.label = compatibility_label
+                    dos_result.label = method_label
                     dos_result.energies = dos_data_sections[0]['energies_ref']
                     dos_result.total = totals
                     dos_result.spin_polarized = len(dos_data_sections) == 2
@@ -1300,7 +1339,7 @@ class ResultsNormalizerBase:
             for band_structure in output.electronic_band_structures or []:
                 mapped_band_structure = self._map_band_structure(band_structure)
                 if mapped_band_structure:
-                    mapped_band_structure.label = compatibility_label
+                    mapped_band_structure.label = method_label
                     output_band_structures.append(mapped_band_structure)
 
             # Ensure compatibility card consumers can read a complete band-gap
@@ -1336,7 +1375,7 @@ class ResultsNormalizerBase:
 
             mapped_greens_functions = self._map_greens_functions(output)
             if mapped_greens_functions:
-                mapped_greens_functions.label = compatibility_label
+                mapped_greens_functions.label = method_label
                 output_greens_functions.append(mapped_greens_functions)
 
             if (
@@ -1375,23 +1414,26 @@ class ResultsNormalizerBase:
 
             for absorption in output.absorption_spectra or []:
                 mapped_spectrum = self._map_spectrum(absorption, 'unavailable')
-                if mapped_spectrum:
+                if mapped_spectrum and method_label:
                     mapped_spectrum.provenance = SpectraProvenance(
-                        label=compatibility_label
+                        label=method_label
                     )
+                if mapped_spectrum:
                     spectra_sections.append(mapped_spectrum)
             for xas in output.xas_spectra or []:
                 mapped_spectrum = self._map_spectrum(xas, 'XAS')
-                if mapped_spectrum:
+                if mapped_spectrum and method_label:
                     mapped_spectrum.provenance = SpectraProvenance(
-                        label=compatibility_label
+                        label=method_label
                     )
+                if mapped_spectrum:
                     spectra_sections.append(mapped_spectrum)
 
             for rg in output.radii_of_gyration or []:
                 mapped_rg = self._map_radius_of_gyration(rg)
+                if mapped_rg and method_label:
+                    mapped_rg.provenance = MDProvenance(label=method_label)
                 if mapped_rg:
-                    mapped_rg.provenance = MDProvenance(label=compatibility_label)
                     rg_sections.append(mapped_rg)
 
             point_time = getattr(output, 'time', None)
@@ -1562,14 +1604,18 @@ class ResultsNormalizerBase:
                 electronic = properties.m_create(ElectronicProperties)
 
             for band_gap in latest_band_gaps:
+                self._mark_compatibility_section(band_gap)
                 electronic.m_add_sub_section(ElectronicProperties.band_gap, band_gap)
             for dos in latest_dos_sections:
+                self._mark_compatibility_section(dos)
                 electronic.m_add_sub_section(ElectronicProperties.dos_electronic, dos)
             for band_structure in latest_band_structures:
+                self._mark_compatibility_section(band_structure)
                 electronic.m_add_sub_section(
                     ElectronicProperties.band_structure_electronic, band_structure
                 )
             for greens in latest_greens_functions:
+                self._mark_compatibility_section(greens)
                 electronic.m_add_sub_section(
                     ElectronicProperties.greens_functions_electronic, greens
                 )
@@ -1579,6 +1625,7 @@ class ResultsNormalizerBase:
             if spectroscopic is None:
                 spectroscopic = properties.m_create(SpectroscopicProperties)
             for spectrum in spectra_sections:
+                self._mark_compatibility_section(spectrum)
                 spectroscopic.m_add_sub_section(
                     SpectroscopicProperties.spectra, spectrum
                 )
@@ -1588,6 +1635,7 @@ class ResultsNormalizerBase:
             if structural is None:
                 structural = properties.m_create(StructuralProperties)
             for rg in rg_sections:
+                self._mark_compatibility_section(rg)
                 structural.m_add_sub_section(
                     StructuralProperties.radius_of_gyration, rg
                 )
@@ -1596,9 +1644,8 @@ class ResultsNormalizerBase:
             thermodynamic = properties.thermodynamic
             if thermodynamic is None:
                 thermodynamic = properties.m_create(ThermodynamicProperties)
-            trajectory = Trajectory(
-                provenance=MDProvenance(label=V2_COMPATIBILITY_LABEL)
-            )
+            trajectory = Trajectory()
+            self._mark_compatibility_section(trajectory)
             available_properties: list[str] = []
             if temperature_series:
                 trajectory.temperature = TemperatureDynamic(
