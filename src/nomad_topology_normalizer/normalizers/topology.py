@@ -12,10 +12,12 @@ Topology Creation Strategy (Waterfall)
 1. **topology_calculation()** - Extract from parser-defined sub_systems
    └─ Uses data.model_system[].sub_systems if available
 
-2. **topology_matid()** - Algorithmic detection using MatID
+2. **topology_v2_symmetry()** - Consume analyzed v2 symmetry/representations
+
+3. **topology_matid()** - Algorithmic fallback using MatID
    └─ Symmetry analysis and clustering for automatic topology detection
 
-3. **topology_data()** - Fallback for SystemV2 entries
+4. **topology_data()** - Fallback for SystemV2 entries
    └─ Direct conversion from SystemV2 structure
 
 Note: Schema version detection and routing logic is in ResultsNormalizer.
@@ -77,9 +79,12 @@ from nomad_topology_normalizer.normalizers.material import MaterialNormalizer
 from nomad_topology_normalizer.normalizers.normalizer import Normalizer
 from nomad_topology_normalizer.normalizers.symmetry_adapter import (
     apply_symmetry_data_to_results_symmetry,
+    find_model_system_representation,
     from_legacy_repr_symmetry,
     from_model_system,
+    has_complete_model_system_symmetry,
     is_symmetry_data_minimally_complete,
+    wyckoff_sets_from_model_system,
 )
 
 conventional_description: str = (
@@ -498,12 +503,17 @@ class TopologyNormalizer(Normalizer):
         # First: topology from data schema calculation (v2)
         topology = self.topology_calculation()
 
-        # Second: create topology with MatID
+        # Second: consume symmetry and conventional-cell data already normalized
+        # by nomad-simulations. This avoids repeating MatID symmetry analysis.
+        if topology is None:
+            topology = self.topology_v2_symmetry(material)
+
+        # Third: use MatID only when required v2 inputs are missing/incomplete.
         if topology is None:
             with utils.timer(self.logger, 'calculating topology with matid'):
                 topology = self.topology_matid(material)
 
-        # Third: fallback to topology_data for SystemV2 entries
+        # Fourth: fallback to topology_data for SystemV2 entries
         if topology is None:
             if system_v2 is not None:
                 topology = self.topology_data(system_v2)
@@ -678,6 +688,76 @@ class TopologyNormalizer(Normalizer):
                 result = list(topology.values())
 
         return result
+
+    def topology_v2_symmetry(self, material: Material) -> list[System] | None:
+        """Build bulk topology from existing v2 symmetry and representations."""
+        if getattr(self.repr_system, 'type', None) != 'bulk':
+            return None
+        if not has_complete_model_system_symmetry(self.repr_system):
+            return None
+
+        conventional = find_model_system_representation(
+            self.repr_system, 'conventional'
+        )
+        symmetry_data = from_model_system(self.repr_system)
+        wyckoff_sets = wyckoff_sets_from_model_system(self.repr_system)
+        material_id = material.material_id or material_id_bulk(
+            symmetry_data['space_group_number'], wyckoff_sets
+        )
+        if conventional is None or material_id is None:
+            return None
+
+        try:
+            lattice_vectors = conventional.lattice_vectors.to('angstrom').magnitude
+            conventional_symbols = [
+                wyckoff_set.element
+                for wyckoff_set in wyckoff_sets
+                for _ in wyckoff_set.indices
+            ]
+            # This transient ASE object is used only by the existing Cell adapter
+            # to calculate lattice parameters and densities. No positions are
+            # published because v2 representations do not currently carry them.
+            cell_atoms = Atoms(
+                symbols=conventional_symbols,
+                cell=np.asarray(lattice_vectors),
+                pbc=True,
+            )
+        except Exception:
+            return None
+
+        topology: dict[str, System] = {}
+        particles = getattr(self.repr_system, 'particle_states', None)
+        original = get_topology_original(particles, self.entry_archive)
+        add_system(original, topology)
+        add_system_info_2(original, topology, parent_system=self.repr_system)
+
+        subsystem = System(
+            method='parser',
+            label='subsystem',
+            dimensionality='3D',
+            structural_type='bulk',
+            description=subsystem_description,
+            system_relation=Relation(type='subsystem'),
+            indices=[list(range(original.n_atoms))],
+        )
+        add_system(subsystem, topology, original)
+        add_system_info_2(subsystem, topology, parent_system=self.repr_system)
+
+        conventional_system = System(
+            method='parser',
+            label='conventional cell',
+            dimensionality='3D',
+            structural_type='bulk',
+            description=conventional_description,
+            system_relation=Relation(type='conventional_cell'),
+            n_atoms=sum(len(wyckoff_set.indices) for wyckoff_set in wyckoff_sets),
+            material_id=material_id,
+            symmetry=self._symmetry_from_data(symmetry_data),
+            cell=cell_from_ase_atoms(cell_atoms),
+        )
+        add_system(conventional_system, topology, subsystem)
+        material.material_id = material_id
+        return list(topology.values())
 
     def topology_matid(self, material: Material) -> list[SystemV2] | None:  # noqa: PLR0912
         """

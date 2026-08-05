@@ -37,6 +37,7 @@ from nomad_topology_normalizer.normalizers.symmetry_adapter import (
     from_legacy_repr_symmetry,
     from_model_system,
     is_symmetry_data_minimally_complete,
+    wyckoff_sets_from_model_system,
 )
 
 
@@ -252,6 +253,14 @@ class MaterialNormalizer:
         material.symmetry = self.symmetry()
 
         if self.structural_type == 'bulk':
+            # Reuse the crystallographic analysis already performed by
+            # nomad-simulations. MatID remains the topology fallback only when
+            # these material-id inputs are absent or inconsistent.
+            v2_symmetry_data = from_model_system(self.repr_system)
+            if self.spg_number is None:
+                self.spg_number = v2_symmetry_data.get('space_group_number')
+            if self.wyckoff_sets is None:
+                self.wyckoff_sets = wyckoff_sets_from_model_system(self.repr_system)
             if self.spg_number is not None and self.wyckoff_sets is not None:
                 material.material_id = material_id_bulk(
                     self.spg_number, self.wyckoff_sets

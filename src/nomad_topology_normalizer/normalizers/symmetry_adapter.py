@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from typing import Any
 
+from ase.data import chemical_symbols
+from nomad.datamodel.results import WyckoffSet
+
 # TODO(migration): Keep adapter local to topology-normalizer during v2 migration.
 # TODO(migration): Re-evaluate elevation only after nomad-simulations/nomad-FAIR
 # symmetry field stability is confirmed and cross-plugin parity fixtures exist.
@@ -102,6 +105,106 @@ def from_model_system(model_system: Any) -> dict[str, Any]:
         site_multiplicities=getattr(local_symmetry, 'site_multiplicities', None),
     )
     return symmetry_data
+
+
+def find_model_system_representation(model_system: Any, cell_type: str) -> Any | None:
+    """Return an existing analyzed representation for the requested cell type."""
+    if model_system is None:
+        return None
+    requested = cell_type.lower()
+    for representation in getattr(model_system, 'representations', None) or []:
+        representation_type = getattr(representation, 'crystal_cell_type', None)
+        representation_name = getattr(representation, 'name', None)
+        if any(
+            isinstance(value, str) and value.lower() == requested
+            for value in (representation_type, representation_name)
+        ):
+            return representation
+    return None
+
+
+def wyckoff_sets_from_model_system(model_system: Any) -> list[WyckoffSet] | None:
+    """Build legacy material-id inputs from normalized v2 local symmetry.
+
+    ``site_multiplicities`` already contains the conventional-cell orbit size.
+    The returned indices are therefore count carriers for the unchanged legacy
+    ``material_id_bulk`` hashing function; no crystallographic analysis is repeated.
+    """
+    if model_system is None:
+        return None
+
+    local_symmetry = getattr(model_system, 'local_symmetry', None)
+    letters = getattr(local_symmetry, 'wyckoff_letters', None)
+    equivalent_atoms = getattr(local_symmetry, 'equivalent_atoms', None)
+    multiplicities = getattr(local_symmetry, 'site_multiplicities', None)
+    if letters is None or equivalent_atoms is None or multiplicities is None:
+        return None
+
+    try:
+        labels = list(model_system.get_symbols())
+    except Exception:
+        labels = []
+        for particle_state in getattr(model_system, 'particle_states', None) or []:
+            label = getattr(particle_state, 'chemical_symbol', None)
+            if label is None:
+                atomic_number = getattr(particle_state, 'atomic_number', None)
+                try:
+                    label = chemical_symbols[int(atomic_number)]
+                except Exception:
+                    return None
+            labels.append(label)
+
+    try:
+        if not labels or not (
+            len(labels)
+            == len(letters)
+            == len(equivalent_atoms)
+            == len(multiplicities)
+        ):
+            return None
+    except TypeError:
+        return None
+
+    grouped_indices: dict[int, list[int]] = {}
+    for index, equivalent_index in enumerate(equivalent_atoms):
+        grouped_indices.setdefault(int(equivalent_index), []).append(index)
+
+    wyckoff_sets: list[WyckoffSet] = []
+    for indices in grouped_indices.values():
+        elements = {str(labels[index]) for index in indices}
+        group_letters = {str(letters[index]) for index in indices}
+        group_multiplicities = {int(multiplicities[index]) for index in indices}
+        if (
+            len(elements) != 1
+            or len(group_letters) != 1
+            or len(group_multiplicities) != 1
+        ):
+            return None
+
+        multiplicity = group_multiplicities.pop()
+        if multiplicity <= 0:
+            return None
+        wyckoff_sets.append(
+            WyckoffSet(
+                element=elements.pop(),
+                wyckoff_letter=group_letters.pop(),
+                indices=list(range(multiplicity)),
+            )
+        )
+
+    return wyckoff_sets or None
+
+
+def has_complete_model_system_symmetry(model_system: Any) -> bool:
+    """Whether v2 carries every input needed for bulk results and material ID."""
+    symmetry_data = from_model_system(model_system)
+    conventional = find_model_system_representation(model_system, 'conventional')
+    return bool(
+        is_symmetry_data_minimally_complete(symmetry_data)
+        and wyckoff_sets_from_model_system(model_system)
+        and conventional is not None
+        and getattr(conventional, 'lattice_vectors', None) is not None
+    )
 
 
 def apply_symmetry_data_to_results_symmetry(

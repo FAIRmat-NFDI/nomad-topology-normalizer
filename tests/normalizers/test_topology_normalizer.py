@@ -2,7 +2,9 @@
 from types import SimpleNamespace
 
 import numpy as np
+from matid import SymmetryAnalyzer
 from nomad.client import normalize_all
+from nomad.config import config
 from nomad.datamodel import EntryArchive, EntryMetadata
 from nomad.datamodel.metainfo.workflow import Workflow
 from nomad.datamodel.results import Material, Relation, Results, System
@@ -10,8 +12,14 @@ from nomad.units import ureg
 from nomad.utils import get_logger
 from nomad_simulations.schema_packages.atoms_state import AtomsState
 from nomad_simulations.schema_packages.general import Simulation
-from nomad_simulations.schema_packages.model_system import ModelSystem
+from nomad_simulations.schema_packages.model_system import (
+    AlternativeRepresentation,
+    GlobalCrystalSymmetry,
+    LocalCrystalSymmetry,
+    ModelSystem,
+)
 
+from nomad_topology_normalizer.normalizers.common import material_id_bulk
 from nomad_topology_normalizer.normalizers.topology import (
     TopologyNormalizer,
     add_system,
@@ -28,6 +36,40 @@ def _make_bulk_model_system() -> ModelSystem:
     system.particle_states.append(AtomsState(chemical_symbol='Si', atomic_number=14))
     system.particle_states.append(AtomsState(chemical_symbol='Si', atomic_number=14))
     return system
+
+
+def _add_complete_v2_symmetry(system: ModelSystem) -> None:
+    """Populate the normalized symmetry inputs produced by nomad-simulations."""
+    system.symmetry = GlobalCrystalSymmetry(
+        hall_number=458,
+        hall_symbol='-R 3 2"',
+        lattice_type='h - hexagonal',
+        lattice_centering='R - rhombohedral',
+        space_group_number=166,
+        space_group_symbol='R-3m',
+        point_group_symbol='-3m',
+    )
+    system.local_symmetry = LocalCrystalSymmetry(
+        wyckoff_letters=['c', 'c'],
+        equivalent_atoms=[0, 0],
+        site_multiplicities=[6, 6],
+    )
+    system.representations.extend(
+        [
+            AlternativeRepresentation(
+                name='primitive',
+                crystal_cell_type='primitive',
+                lattice_vectors=np.eye(3) * 4.0 * ureg.angstrom,
+                periodic_boundary_conditions=[True, True, True],
+            ),
+            AlternativeRepresentation(
+                name='conventional',
+                crystal_cell_type='conventional',
+                lattice_vectors=np.eye(3) * 8.0 * ureg.angstrom,
+                periodic_boundary_conditions=[True, True, True],
+            ),
+        ]
+    )
 
 
 def test_topology_calculation():
@@ -915,19 +957,11 @@ def test_topology_bulk_uses_matid_for_material_id_fallback(monkeypatch):
     assert conv_system.material_id is not None
 
 
-def test_topology_runs_matid_for_bulk_with_complete_v2_symmetry(monkeypatch):
+def test_topology_consumes_complete_v2_bulk_symmetry_without_matid(monkeypatch):
     archive = EntryArchive(metadata=EntryMetadata())
     archive.results = Results(material=Material(structural_type='bulk'))
     system = _make_bulk_model_system()
-    system.symmetry = SimpleNamespace(
-        hall_number=523,
-        hall_symbol='-F 4 2 3',
-        bravais_lattice='cF',
-        crystal_system='cubic',
-        space_group_number=225,
-        space_group_symbol='Fm-3m',
-        point_group_symbol='m-3m',
-    )
+    _add_complete_v2_symmetry(system)
     simulation = Simulation()
     simulation.model_system.append(system)
     archive.data = simulation
@@ -939,34 +973,71 @@ def test_topology_runs_matid_for_bulk_with_complete_v2_symmetry(monkeypatch):
 
     monkeypatch.setattr(normalizer, 'topology_calculation', lambda: None)
 
-    called = {'value': False}
+    def fail_matid(_):
+        raise AssertionError('complete v2 symmetry must not invoke MatID fallback')
 
-    def run_matid(_):
-        called['value'] = True
-        return ['topology-matid']
-
-    monkeypatch.setattr(normalizer, 'topology_matid', run_matid)
+    monkeypatch.setattr(normalizer, 'topology_matid', fail_matid)
     monkeypatch.setattr(normalizer, 'topology_data', lambda *_: ['topology-data'])
 
     result = normalizer.topology(archive.results.material, system_v2=system)
 
-    assert called['value'] is True
-    assert result == ['topology-matid']
+    assert [section.label for section in result] == [
+        'original',
+        'subsystem',
+        'conventional cell',
+    ]
+    assert result[-1].material_id is not None
+    assert result[-1].symmetry.space_group_number == 166
+    assert result[-1].cell is not None
+    assert result[-1].cell.atomic_density is not None
+
+
+def test_topology_reuses_nomad_simulations_bulk_analysis(monkeypatch):
+    archive = EntryArchive(metadata=EntryMetadata(), results=Results())
+    system = _make_bulk_model_system()
+    archive.data = Simulation(model_system=[system])
+
+    # This is the authoritative simulation-layer symmetry normalization. The
+    # topology normalizer must consume its symmetry/local-symmetry/representations.
+    system.normalize(archive, LOGGER)
+    assert system.symmetry is not None
+    assert system.local_symmetry is not None
+    assert system.representations
+
+    legacy_analyzer = SymmetryAnalyzer(
+        system.to_ase_atoms(),
+        config.normalize.symmetry_tolerance,
+        config.normalize.flat_dim_threshold,
+    )
+    expected_material_id = material_id_bulk(
+        legacy_analyzer.get_space_group_number(),
+        legacy_analyzer.get_wyckoff_sets_conventional(),
+    )
+
+    def fail_matid(*_args, **_kwargs):
+        raise AssertionError('topology normalizer repeated MatID symmetry analysis')
+
+    monkeypatch.setattr(TopologyNormalizer, 'topology_matid', fail_matid)
+
+    TopologyNormalizer().normalize(archive, LOGGER)
+
+    material = archive.results.material
+    conventional = next(
+        section for section in material.topology if section.label == 'conventional cell'
+    )
+    assert material.material_id == expected_material_id
+    assert conventional.material_id == material.material_id
+    assert (
+        conventional.symmetry.space_group_number
+        == system.symmetry.space_group_number
+    )
 
 
 def test_complete_v2_bulk_symmetry_gets_material_id():
     archive = EntryArchive(metadata=EntryMetadata())
     archive.results = Results(material=Material(structural_type='bulk'))
     system = _make_bulk_model_system()
-    system.symmetry = SimpleNamespace(
-        hall_number=523,
-        hall_symbol='-F 4 2 3',
-        bravais_lattice='cF',
-        crystal_system='cubic',
-        space_group_number=225,
-        space_group_symbol='Fm-3m',
-        point_group_symbol='m-3m',
-    )
+    _add_complete_v2_symmetry(system)
     archive.data = Simulation(model_system=[system])
 
     TopologyNormalizer().normalize(archive, LOGGER)
