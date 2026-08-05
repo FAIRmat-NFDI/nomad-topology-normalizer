@@ -393,9 +393,13 @@ class ResultsNormalizerBase:
             for setting in settings:
                 setting_name = getattr(getattr(setting, 'm_def', None), 'name', None)
                 if setting_name == 'SelfConsistency':
-                    threshold_change = setting.threshold_change
+                    threshold_change = getattr(setting, 'threshold_change', None)
                     if threshold_change is not None:
-                        threshold_unit = setting.threshold_change_unit
+                        # The current flexible-unit schema returns a Pint quantity
+                        # directly. Older schemas stored a separate unit string.
+                        if getattr(threshold_change, 'units', None) is not None:
+                            return threshold_change
+                        threshold_unit = getattr(setting, 'threshold_change_unit', None)
                         if threshold_unit:
                             try:
                                 return threshold_change * ureg(threshold_unit)
@@ -789,7 +793,13 @@ class ResultsNormalizerBase:
                 self.logger.warning('skipping incompatible greens field', field=name)
                 return False
 
-        gf_type = GreensFunctionsElectronic.m_def.all_quantities['tau'].type
+        # The legacy Green's-function payload quantities were removed from the
+        # current results schema. Skip this compatibility mapping when they are
+        # unavailable instead of failing every output normalization.
+        tau_quantity = GreensFunctionsElectronic.m_def.all_quantities.get('tau')
+        if tau_quantity is None:
+            return None
+        gf_type = tau_quantity.type
         gf_cls = gf_type.target_quantity_def.m_parent.section_cls
         available_fields = set(gf_cls.m_def.all_quantities.keys())
         legacy_gf = gf_cls()

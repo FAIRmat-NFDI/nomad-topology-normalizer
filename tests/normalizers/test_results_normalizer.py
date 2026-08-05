@@ -7,6 +7,7 @@ from nomad.datamodel.data import ArchiveSection
 from nomad.datamodel.results import (
     DOSElectronic,
     ElectronicProperties,
+    GreensFunctionsElectronic,
     Properties,
     Results,
 )
@@ -24,7 +25,11 @@ from nomad_simulations.schema_packages.model_method import (
     Wannier,
 )
 from nomad_simulations.schema_packages.model_system import ModelSystem
-from nomad_simulations.schema_packages.numerical_settings import KSpace, Smearing
+from nomad_simulations.schema_packages.numerical_settings import (
+    KSpace,
+    SelfConsistency,
+    Smearing,
+)
 from nomad_simulations.schema_packages.outputs import Outputs
 from nomad_simulations.schema_packages.properties import (
     AbsorptionSpectrum,
@@ -494,6 +499,21 @@ def test_data_schema_maps_dft_spin_and_jacobs_ladder():
     assert archive.results.method.simulation.dft.xc_functional_type == 'GGA'
 
 
+def test_data_schema_maps_flexible_unit_scf_threshold(archive_with_data_schema):
+    """Current SelfConsistency quantities should map without a legacy unit field."""
+    simulation = archive_with_data_schema.data
+    simulation.program = Program(name='VASP')
+    dft = DFT()
+    dft.numerical_settings.append(SelfConsistency(threshold_change=1.0e-5 * ureg.eV))
+    simulation.model_method.append(dft)
+
+    ResultsNormalizer().normalize(archive_with_data_schema, LOGGER)
+
+    simulation_results = archive_with_data_schema.results.method.simulation
+    threshold = simulation_results.dft.scf_threshold_energy_change
+    assert threshold.to('eV').magnitude == pytest.approx(1.0e-5)
+
+
 def test_data_schema_maps_outputs_electronic_properties():
     """v2 outputs should map electronic properties into results."""
     archive = EntryArchive(metadata=EntryMetadata())
@@ -531,11 +551,16 @@ def test_data_schema_maps_outputs_electronic_properties():
     band_structure = ElectronicBandStructure(value=np.array([[1.0, 1.1]]) * ureg.eV)
     band_structure.k_path = _kline_path()
     output.electronic_band_structures.append(band_structure)
-    greens_function = ElectronicGreensFunction(value=(1.0 + 0.0j) / ureg.eV)
-    greens_function.matsubara_frequency = MatsubaraFrequency(
-        points=np.array([0.1j, 0.2j]) * ureg.eV
-    )
-    output.electronic_greens_functions.append(greens_function)
+    greens_value_type = ElectronicGreensFunction.m_def.all_quantities['value'].type
+    if (
+        'tau' in GreensFunctionsElectronic.m_def.all_quantities
+        and greens_value_type.__class__.__name__ != 'HDF5Dataset'
+    ):
+        greens_function = ElectronicGreensFunction(value=(1.0 + 0.0j) / ureg.eV)
+        greens_function.matsubara_frequency = MatsubaraFrequency(
+            points=np.array([0.1j, 0.2j]) * ureg.eV
+        )
+        output.electronic_greens_functions.append(greens_function)
     absorption = AbsorptionSpectrum(value=np.array([0.5, 0.6]) / ureg.eV)
     absorption.energies = Energy2(points=np.array([0.0, 1.0]) * ureg.eV)
     output.absorption_spectra.append(absorption)
