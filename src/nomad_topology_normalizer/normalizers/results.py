@@ -860,8 +860,10 @@ class ResultsNormalizerBase:
                 setattr(legacy_gf, axis_name, axis_value)
                 return True
             except Exception:
-                legacy_gf.m_unset(payload_name)
-                legacy_gf.m_unset(axis_name)
+                # MSection has no m_unset API. Passing None to m_set is the
+                # supported overwrite-mode mechanism for clearing a property.
+                legacy_gf.m_set(payload_name, None)
+                legacy_gf.m_set(axis_name, None)
                 self.logger.warning(
                     'skipping incompatible greens axis/payload pair',
                     axis=axis_name,
