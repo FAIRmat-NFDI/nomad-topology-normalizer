@@ -1,10 +1,14 @@
 """Tests for ResultsNormalizer schema detection and routing logic."""
 
+from types import SimpleNamespace
+
 import numpy as np
 import pytest
 from nomad.datamodel import EntryArchive, EntryMetadata
 from nomad.datamodel.data import ArchiveSection
 from nomad.datamodel.results import (
+    BandGap,
+    BandStructureElectronic,
     DOSElectronic,
     ElectronicProperties,
     GreensFunctionsElectronic,
@@ -30,7 +34,7 @@ from nomad_simulations.schema_packages.numerical_settings import (
     SelfConsistency,
     Smearing,
 )
-from nomad_simulations.schema_packages.outputs import Outputs
+from nomad_simulations.schema_packages.outputs import Outputs, TrajectoryOutputs
 from nomad_simulations.schema_packages.properties import (
     AbsorptionSpectrum,
     ElectronicBandGap,
@@ -50,6 +54,7 @@ from nomad_simulations.schema_packages.properties import (
 )
 from nomad_simulations.schema_packages.variables import (
     Energy2,
+    Frequency,
     KLinePath,
     MatsubaraFrequency,
 )
@@ -68,11 +73,15 @@ from nomad_simulations.schema_packages.workflow.geometry_optimization import (
 )
 
 from nomad_topology_normalizer.normalizers.results import (
+    V2_COMPATIBILITY_RUN_ID,
+)
+from nomad_topology_normalizer.normalizers.results import (
     ResultsNormalizerBase as ResultsNormalizer,
 )
 
 try:
     import runschema.calculation  # noqa: F401
+    import runschema.run  # noqa: F401
 
     HAS_RUNSCHEMA = True
 except Exception:
@@ -541,14 +550,14 @@ def test_data_schema_maps_outputs_electronic_properties():
     model_system.periodic_boundary_conditions = [True, True, True]
     simulation.model_system.append(model_system)
 
-    output = Outputs()
+    output = TrajectoryOutputs(time=0.0 * ureg.ps)
     output.electronic_band_gaps.append(ElectronicBandGap(value=1.5 * ureg.eV))
     dos = ElectronicDensityOfStates(
         value=np.array([0.1, 0.2, 0.3]) / ureg.eV, spin_channel=0
     )
     dos.energies = Energy2(points=np.array([-1.0, 0.0, 1.0]) * ureg.eV)
     output.electronic_dos.append(dos)
-    band_structure = ElectronicBandStructure(value=np.array([[1.0, 1.1]]) * ureg.eV)
+    band_structure = ElectronicBandStructure(value=np.array([[1.0], [1.1]]) * ureg.eV)
     band_structure.k_path = _kline_path()
     output.electronic_band_structures.append(band_structure)
     greens_value_type = ElectronicGreensFunction.m_def.all_quantities['value'].type
@@ -569,7 +578,7 @@ def test_data_schema_maps_outputs_electronic_properties():
     output.potential_energies.append(SimPotentialEnergy(value=-5.0 * ureg.eV))
     simulation.outputs.append(output)
 
-    output_2 = Outputs()
+    output_2 = TrajectoryOutputs(time=1.0 * ureg.ps)
     output_2.temperatures.append(SimTemperature(value=320 * ureg.kelvin))
     output_2.potential_energies.append(SimPotentialEnergy(value=-4.8 * ureg.eV))
     simulation.outputs.append(output_2)
@@ -630,14 +639,14 @@ def test_data_schema_uses_latest_output_for_electronic_properties():
 
     output_1 = Outputs()
     output_1.electronic_band_gaps.append(ElectronicBandGap(value=1.5 * ureg.eV))
-    band_structure_1 = ElectronicBandStructure(value=np.array([[1.0, 1.1]]) * ureg.eV)
+    band_structure_1 = ElectronicBandStructure(value=np.array([[1.0], [1.1]]) * ureg.eV)
     band_structure_1.k_path = _kline_path()
     output_1.electronic_band_structures.append(band_structure_1)
     simulation.outputs.append(output_1)
 
     output_2 = Outputs()
     output_2.electronic_band_gaps.append(ElectronicBandGap(value=2.5 * ureg.eV))
-    band_structure_2 = ElectronicBandStructure(value=np.array([[2.0, 2.1]]) * ureg.eV)
+    band_structure_2 = ElectronicBandStructure(value=np.array([[2.0], [2.1]]) * ureg.eV)
     band_structure_2.k_path = _kline_path()
     output_2.electronic_band_structures.append(band_structure_2)
     simulation.outputs.append(output_2)
@@ -706,7 +715,9 @@ def test_data_schema_prefers_representative_system_outputs_for_electronic_proper
     output_rep = Outputs()
     output_rep.model_system_ref = representative_system
     output_rep.electronic_band_gaps.append(ElectronicBandGap(value=1.5 * ureg.eV))
-    band_structure_rep = ElectronicBandStructure(value=np.array([[1.0, 1.1]]) * ureg.eV)
+    band_structure_rep = ElectronicBandStructure(
+        value=np.array([[1.0], [1.1]]) * ureg.eV
+    )
     band_structure_rep.k_path = _kline_path()
     output_rep.electronic_band_structures.append(band_structure_rep)
     simulation.outputs.append(output_rep)
@@ -715,7 +726,7 @@ def test_data_schema_prefers_representative_system_outputs_for_electronic_proper
     output_other.model_system_ref = other_system
     output_other.electronic_band_gaps.append(ElectronicBandGap(value=2.5 * ureg.eV))
     band_structure_other = ElectronicBandStructure(
-        value=np.array([[2.0, 2.1]]) * ureg.eV
+        value=np.array([[2.0], [2.1]]) * ureg.eV
     )
     band_structure_other.k_path = _kline_path()
     output_other.electronic_band_structures.append(band_structure_other)
@@ -761,7 +772,7 @@ def test_data_schema_band_structure_mapping_creates_valid_segment_refs():
     simulation.model_system.append(model_system)
 
     output = Outputs()
-    band_structure = ElectronicBandStructure(value=np.array([[1.0, 1.1]]) * ureg.eV)
+    band_structure = ElectronicBandStructure(value=np.array([[1.0], [1.1]]) * ureg.eV)
     band_structure.k_path = _kline_path()
     output.electronic_band_structures.append(band_structure)
     simulation.outputs.append(output)
@@ -785,6 +796,7 @@ def test_data_schema_band_structure_mapping_creates_valid_segment_refs():
     assert str(segments[0]).startswith(
         '/run/0/calculation/0/band_structure_electronic/0/segment/'
     )
+    assert archive.m_resolve(str(segments[0])) is not None
 
 
 def test_data_schema_band_structure_uses_numerical_settings_kline_path_fallback():
@@ -823,7 +835,7 @@ def test_data_schema_band_structure_uses_numerical_settings_kline_path_fallback(
     simulation.model_system.append(model_system)
 
     output = Outputs()
-    band_structure = ElectronicBandStructure(value=np.array([[1.0, 1.1]]) * ureg.eV)
+    band_structure = ElectronicBandStructure(value=np.array([[1.0], [1.1]]) * ureg.eV)
     output.electronic_band_structures.append(band_structure)
     simulation.outputs.append(output)
     archive.data = simulation
@@ -874,7 +886,7 @@ def test_data_schema_band_structure_skips_non_kspace_numerical_settings():
     simulation.model_system.append(model_system)
 
     output = Outputs()
-    band_structure = ElectronicBandStructure(value=np.array([[1.0, 1.1]]) * ureg.eV)
+    band_structure = ElectronicBandStructure(value=np.array([[1.0], [1.1]]) * ureg.eV)
     output.electronic_band_structures.append(band_structure)
     simulation.outputs.append(output)
     archive.data = simulation
@@ -890,11 +902,8 @@ def test_data_schema_band_structure_skips_non_kspace_numerical_settings():
     assert np.array(segments[0].kpoints).shape[0] > 0
 
 
-def test_data_schema_band_structure_uses_kline_vertex_values_fallback():
-    """Band mapping should use high_symmetry_path_values fallback.
-
-    This fallback is used when k_line points are missing.
-    """
+def test_data_schema_band_structure_skips_ambiguous_vertex_only_path():
+    """Vertex-only paths must not be synthetically resampled onto energy points."""
     archive = EntryArchive(metadata=EntryMetadata())
     archive.results = Results()
     archive.results.properties = Properties()
@@ -930,7 +939,7 @@ def test_data_schema_band_structure_uses_kline_vertex_values_fallback():
     simulation.model_system.append(model_system)
 
     output = Outputs()
-    band_structure = ElectronicBandStructure(value=np.array([[1.0, 1.1]]) * ureg.eV)
+    band_structure = ElectronicBandStructure(value=np.array([[1.0], [1.1]]) * ureg.eV)
     output.electronic_band_structures.append(band_structure)
     simulation.outputs.append(output)
     archive.data = simulation
@@ -939,14 +948,7 @@ def test_data_schema_band_structure_uses_kline_vertex_values_fallback():
     normalizer.normalize(archive, LOGGER)
 
     electronic = archive.results.properties.electronic
-    assert electronic is not None
-    assert electronic.band_structure_electronic
-    segments = electronic.band_structure_electronic[0].segment
-    assert segments
-    assert (
-        np.array(segments[0].kpoints).shape[0]
-        == np.array(segments[0].energies.magnitude).shape[1]
-    )
+    assert electronic is None or not electronic.band_structure_electronic
 
 
 def test_data_schema_propagates_reference_energy_to_legacy_electronic_sections():
@@ -979,7 +981,7 @@ def test_data_schema_propagates_reference_energy_to_legacy_electronic_sections()
     reference_energy = 1.0 * ureg.eV
 
     output = Outputs()
-    band_structure = ElectronicBandStructure(value=np.array([[1.0, 1.1]]) * ureg.eV)
+    band_structure = ElectronicBandStructure(value=np.array([[1.0], [1.1]]) * ureg.eV)
     band_structure.k_path = _kline_path()
     band_structure.highest_occupied = reference_energy
     output.electronic_band_structures.append(band_structure)
@@ -1263,7 +1265,7 @@ def test_data_schema_does_not_create_empty_electronic_properties():
     model_system.periodic_boundary_conditions = [True, True, True]
     simulation.model_system.append(model_system)
 
-    output = Outputs()
+    output = TrajectoryOutputs(time=1.0 * ureg.ps)
     output.radii_of_gyration.append(SimRadiusOfGyration(value=1.2e-10 * ureg.meter))
     output.temperatures.append(SimTemperature(value=300 * ureg.kelvin))
     output.potential_energies.append(SimPotentialEnergy(value=-5.0 * ureg.eV))
@@ -1278,6 +1280,185 @@ def test_data_schema_does_not_create_empty_electronic_properties():
     assert archive.results.properties.structural.radius_of_gyration
     assert archive.results.properties.thermodynamic is not None
     assert archive.results.properties.thermodynamic.trajectory
+
+
+def test_data_schema_trajectory_uses_physical_time(archive_with_data_schema):
+    output = TrajectoryOutputs(time=2.5 * ureg.ps, wall_end=100 * ureg.s)
+    output.temperatures.append(SimTemperature(value=300 * ureg.kelvin))
+    archive_with_data_schema.data.outputs.append(output)
+
+    ResultsNormalizer().normalize(archive_with_data_schema, LOGGER)
+
+    trajectory = archive_with_data_schema.results.properties.thermodynamic.trajectory[0]
+    time = trajectory.temperature.time.to('second').magnitude
+    assert np.asarray(time)[0] == pytest.approx(2.5e-12)
+
+
+def test_data_schema_does_not_merge_different_method_outputs(
+    archive_with_data_schema,
+):
+    simulation = archive_with_data_schema.data
+    system = simulation.model_system[0]
+    dft = DFT()
+    gw = GW()
+    simulation.model_method.extend([dft, gw])
+
+    dft_output = Outputs(model_system_ref=system, model_method_ref=dft)
+    dos = ElectronicDensityOfStates(value=np.array([0.1, 0.2]) / ureg.eV)
+    dos.energies = Energy2(points=np.array([-1.0, 1.0]) * ureg.eV)
+    dft_output.electronic_dos.append(dos)
+    simulation.outputs.append(dft_output)
+
+    gw_output = Outputs(model_system_ref=system, model_method_ref=gw)
+    band_structure = ElectronicBandStructure(value=np.array([[1.0], [1.1]]) * ureg.eV)
+    band_structure.k_path = _kline_path()
+    gw_output.electronic_band_structures.append(band_structure)
+    simulation.outputs.append(gw_output)
+
+    ResultsNormalizer().normalize(archive_with_data_schema, LOGGER)
+
+    electronic = archive_with_data_schema.results.properties.electronic
+    assert electronic.band_structure_electronic
+    assert electronic.band_structure_electronic[0].label.endswith(':GW')
+    assert not electronic.dos_electronic
+
+
+@pytest.mark.skipif(not HAS_RUNSCHEMA, reason='requires runschema')
+def test_data_schema_preserves_legacy_calculation_and_result_sections():
+    archive = EntryArchive(
+        metadata=EntryMetadata(), results=Results(properties=Properties())
+    )
+
+    legacy_run = runschema.run.Run(raw_id='parser-owned')
+    legacy_calculation = runschema.calculation.Calculation()
+    legacy_dos = runschema.calculation.Dos(energies=np.array([-2.0, 2.0]) * ureg.eV)
+    legacy_dos.total.append(
+        runschema.calculation.DosValues(value=np.array([0.3, 0.4]) / ureg.eV)
+    )
+    legacy_calculation.dos_electronic.append(legacy_dos)
+    legacy_band_structure = runschema.calculation.BandStructure()
+    legacy_band_structure.segment.append(
+        runschema.calculation.BandEnergies(
+            energies=np.array([[[2.0], [2.1]]]) * ureg.eV,
+            kpoints=np.array([[0.0, 0.0, 0.0], [0.5, 0.5, 0.5]]),
+        )
+    )
+    legacy_calculation.band_structure_electronic.append(legacy_band_structure)
+    legacy_run.calculation.append(legacy_calculation)
+    archive.run.append(legacy_run)
+
+    electronic = archive.results.properties.m_create(ElectronicProperties)
+    parser_dos = DOSElectronic(label='parser-owned')
+    parser_dos.energies = '/run/0/calculation/0/dos_electronic/0/energies'
+    parser_dos.total = ['/run/0/calculation/0/dos_electronic/0/total/0']
+    electronic.m_add_sub_section(ElectronicProperties.dos_electronic, parser_dos)
+    parser_band_structure = BandStructureElectronic(label='parser-owned')
+    parser_band_structure.segment = legacy_band_structure.segment
+    electronic.m_add_sub_section(
+        ElectronicProperties.band_structure_electronic, parser_band_structure
+    )
+    electronic.m_add_sub_section(
+        ElectronicProperties.band_gap, BandGap(value=9.0 * ureg.eV)
+    )
+
+    simulation = Simulation(program=Program(name='VASP'))
+    system = ModelSystem(is_representative=True, type='molecule')
+    simulation.model_system.append(system)
+    output = Outputs()
+    output.electronic_band_gaps.append(ElectronicBandGap(value=1.0 * ureg.eV))
+    mapped_dos = ElectronicDensityOfStates(value=np.array([0.1, 0.2]) / ureg.eV)
+    mapped_dos.energies = Energy2(points=np.array([-1.0, 1.0]) * ureg.eV)
+    output.electronic_dos.append(mapped_dos)
+    mapped_band_structure = ElectronicBandStructure(
+        value=np.array([[1.0], [1.1]]) * ureg.eV
+    )
+    mapped_band_structure.k_path = _kline_path()
+    output.electronic_band_structures.append(mapped_band_structure)
+    simulation.outputs.append(output)
+    archive.data = simulation
+
+    ResultsNormalizer().normalize(archive, LOGGER)
+
+    assert archive.run[0] is legacy_run
+    assert legacy_calculation.dos_electronic[0] is legacy_dos
+    assert legacy_calculation.band_structure_electronic[0] is legacy_band_structure
+    assert archive.run[1].raw_id == V2_COMPATIBILITY_RUN_ID
+    assert any(section.label == 'parser-owned' for section in electronic.dos_electronic)
+    assert any(
+        section.label == 'parser-owned'
+        for section in electronic.band_structure_electronic
+    )
+    assert any(gap.value.to('eV').magnitude == 9.0 for gap in electronic.band_gap)
+
+    serialized = archive.m_to_dict()
+    generated_dos = next(
+        section
+        for section in serialized['results']['properties']['electronic'][
+            'dos_electronic'
+        ]
+        if section.get('label', '').startswith('nomad-topology-normalizer:')
+    )
+    assert generated_dos['energies'].startswith('/run/1/calculation/0/')
+    assert all(
+        ref.startswith('/run/1/calculation/0/') for ref in generated_dos['total']
+    )
+    assert archive.m_resolve(generated_dos['energies']) is not None
+    assert all(archive.m_resolve(ref) is not None for ref in generated_dos['total'])
+
+
+def test_data_schema_output_mapping_is_idempotent(archive_with_data_schema):
+    output = TrajectoryOutputs(time=2.0 * ureg.ps)
+    absorption = AbsorptionSpectrum(value=np.array([0.5, 0.6]) / ureg.eV)
+    absorption.energies = Energy2(points=np.array([0.0, 1.0]) * ureg.eV)
+    output.absorption_spectra.append(absorption)
+    output.radii_of_gyration.append(SimRadiusOfGyration(value=1.2 * ureg.angstrom))
+    output.temperatures.append(SimTemperature(value=300 * ureg.kelvin))
+    archive_with_data_schema.data.outputs.append(output)
+
+    normalizer = ResultsNormalizer()
+    normalizer.normalize(archive_with_data_schema, LOGGER)
+    properties = archive_with_data_schema.results.properties
+    first_counts = (
+        len(properties.spectroscopic.spectra),
+        len(properties.structural.radius_of_gyration),
+        len(properties.thermodynamic.trajectory),
+    )
+    first_time = properties.thermodynamic.trajectory[0].temperature.time.copy()
+
+    normalizer.normalize(archive_with_data_schema, LOGGER)
+
+    assert (
+        len(properties.spectroscopic.spectra),
+        len(properties.structural.radius_of_gyration),
+        len(properties.thermodynamic.trajectory),
+    ) == first_counts
+    np.testing.assert_allclose(
+        properties.thermodynamic.trajectory[0].temperature.time,
+        first_time,
+    )
+
+
+def test_greens_mapping_does_not_create_axis_only_result():
+    if 'tau' not in GreensFunctionsElectronic.m_def.all_quantities:
+        pytest.skip('legacy Green functions fields unavailable')
+
+    greens = SimpleNamespace(
+        imaginary_time=None,
+        matsubara_frequency=None,
+        real_frequency=Frequency(points=np.array([0.0, 1.0]) * ureg.eV),
+        value=np.array([1.0 + 1.0j, 2.0 + 1.0j]) / ureg.eV,
+    )
+    output = SimpleNamespace(
+        electronic_greens_functions=[greens],
+        electronic_self_energies=[],
+        hybridization_functions=[],
+        quasiparticle_weights=[],
+        chemical_potentials=[],
+    )
+    normalizer = ResultsNormalizer()
+    normalizer.logger = LOGGER
+
+    assert normalizer._map_greens_functions(output) is None
 
 
 def test_data_schema_logs_unmapped_output_groups(archive_with_data_schema, caplog):

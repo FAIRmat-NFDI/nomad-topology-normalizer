@@ -415,10 +415,6 @@ class TopologyNormalizer(Normalizer):
             )
         return symmetry_data
 
-    def _has_complete_model_system_symmetry(self) -> bool:
-        """True when v2 ModelSystem symmetry is complete without legacy fallback."""
-        return is_symmetry_data_minimally_complete(from_model_system(self.repr_system))
-
     @staticmethod
     def _symmetry_from_data(symmetry_data: dict[str, object]) -> Symmetry | None:
         if not any(value is not None for value in symmetry_data.values()):
@@ -437,6 +433,7 @@ class TopologyNormalizer(Normalizer):
         self.repr_system = None
         self.repr_symmetry = None
         self.conv_atoms = None
+        self._matid_symmetry_analyzer = None
         self.masses = None
 
         # Get representative system from data
@@ -502,12 +499,7 @@ class TopologyNormalizer(Normalizer):
         topology = self.topology_calculation()
 
         # Second: create topology with MatID
-        skip_matid_bulk = bool(
-            material
-            and material.structural_type == 'bulk'
-            and self._has_complete_model_system_symmetry()
-        )
-        if topology is None and not skip_matid_bulk:
+        if topology is None:
             with utils.timer(self.logger, 'calculating topology with matid'):
                 topology = self.topology_matid(material)
 
@@ -701,6 +693,25 @@ class TopologyNormalizer(Normalizer):
         if not atoms or len(atoms) == 0:
             return None
 
+        if material.structural_type == 'bulk' and self.conv_atoms is None:
+            try:
+                symmetry_system = atoms.copy()
+                symmetry_system.set_pbc(True)
+                self._matid_symmetry_analyzer = SymmetryAnalyzer(
+                    symmetry_system,
+                    config.normalize.symmetry_tolerance,
+                    config.normalize.flat_dim_threshold,
+                )
+                self.conv_atoms = (
+                    self._matid_symmetry_analyzer.get_conventional_system()
+                )
+                self.conv_atoms.set_pbc(True)
+            except Exception as error:
+                self.logger.warning(
+                    'could not construct MatID inputs for v2 bulk system',
+                    exc_info=error,
+                )
+
         # Create topology for the original system
         topology: dict[str, System] = {}
         particles = self.repr_system.particle_states
@@ -870,6 +881,8 @@ class TopologyNormalizer(Normalizer):
         m_cache = getattr(self.repr_symmetry, 'm_cache', None)
         if m_cache is not None and hasattr(m_cache, 'get'):
             symmetry_analyzer = m_cache.get('symmetry_analyzer')
+        if symmetry_analyzer is None:
+            symmetry_analyzer = self._matid_symmetry_analyzer
 
         symmetry_data = self._resolved_symmetry_data()
         conv_system.symmetry = self._symmetry_from_data(symmetry_data)
@@ -885,6 +898,8 @@ class TopologyNormalizer(Normalizer):
                 symmetry_analyzer.get_space_group_number(),
                 symmetry_analyzer.get_wyckoff_sets_conventional(),
             )
+            if material is not None:
+                material.material_id = conv_system.material_id
         add_system(conv_system, topology, subsystem)
         add_system_info_2(conv_system, topology, parent_system=self.repr_system)
 

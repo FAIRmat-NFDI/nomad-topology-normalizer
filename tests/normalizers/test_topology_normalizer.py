@@ -915,7 +915,7 @@ def test_topology_bulk_uses_matid_for_material_id_fallback(monkeypatch):
     assert conv_system.material_id is not None
 
 
-def test_topology_skips_matid_for_bulk_with_complete_v2_symmetry(monkeypatch):
+def test_topology_runs_matid_for_bulk_with_complete_v2_symmetry(monkeypatch):
     archive = EntryArchive(metadata=EntryMetadata())
     archive.results = Results(material=Material(structural_type='bulk'))
     system = _make_bulk_model_system()
@@ -939,15 +939,39 @@ def test_topology_skips_matid_for_bulk_with_complete_v2_symmetry(monkeypatch):
 
     monkeypatch.setattr(normalizer, 'topology_calculation', lambda: None)
 
-    def fail_matid(_):
-        raise AssertionError('topology_matid should be skipped for complete v2 bulk')
+    called = {'value': False}
 
-    monkeypatch.setattr(normalizer, 'topology_matid', fail_matid)
+    def run_matid(_):
+        called['value'] = True
+        return ['topology-matid']
+
+    monkeypatch.setattr(normalizer, 'topology_matid', run_matid)
     monkeypatch.setattr(normalizer, 'topology_data', lambda *_: ['topology-data'])
 
     result = normalizer.topology(archive.results.material, system_v2=system)
 
-    assert result == ['topology-data']
+    assert called['value'] is True
+    assert result == ['topology-matid']
+
+
+def test_complete_v2_bulk_symmetry_gets_material_id():
+    archive = EntryArchive(metadata=EntryMetadata())
+    archive.results = Results(material=Material(structural_type='bulk'))
+    system = _make_bulk_model_system()
+    system.symmetry = SimpleNamespace(
+        hall_number=523,
+        hall_symbol='-F 4 2 3',
+        bravais_lattice='cF',
+        crystal_system='cubic',
+        space_group_number=225,
+        space_group_symbol='Fm-3m',
+        point_group_symbol='m-3m',
+    )
+    archive.data = Simulation(model_system=[system])
+
+    TopologyNormalizer().normalize(archive, LOGGER)
+
+    assert archive.results.material.material_id is not None
 
 
 def test_topology_runs_matid_for_bulk_with_incomplete_v2_symmetry(monkeypatch):

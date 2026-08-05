@@ -121,6 +121,29 @@ class TestMaterialNormalizer:
         assert 'Na' in symbols
         assert 'Cl' in symbols
 
+    @pytest.mark.parametrize('system_type', ['molecule', 'cluster'])
+    def test_molecule_and_cluster_use_legacy_combined_structural_type(
+        self, system_type
+    ):
+        archive = EntryArchive(metadata=EntryMetadata(), results=Results())
+        system = create_test_system()
+        system.type = system_type
+        archive.data = Simulation(model_system=[system])
+
+        material = MaterialNormalizer(
+            archive,
+            system,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            LOGGER,
+        ).material(populate_topology=False)
+
+        assert material.structural_type == 'molecule / cluster'
+
     def test_dimensionality_from_pbc(self):
         """Test that dimensionality is correctly determined from PBC."""
         archive = EntryArchive(metadata=EntryMetadata())

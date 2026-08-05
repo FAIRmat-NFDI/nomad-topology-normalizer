@@ -201,8 +201,12 @@ class MaterialNormalizer:
                     allowed_structural_types = set(
                         Material.m_def.all_quantities['structural_type'].type
                     )
-                    if self.structural_type in allowed_structural_types:
-                        material.structural_type = self.structural_type
+                    compatible_structural_type = {
+                        'molecule': 'molecule / cluster',
+                        'cluster': 'molecule / cluster',
+                    }.get(self.structural_type, self.structural_type)
+                    if compatible_structural_type in allowed_structural_types:
+                        material.structural_type = compatible_structural_type
                 # Get classification from results.material if already set
                 # (TopologyNormalizer runs first and may have set dimensionality)
                 existing_dimensionality = material.dimensionality
