@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 
-from nomad.datamodel.results import Symmetry
+from nomad.datamodel.results import Symmetry, SymmetryNew
+from nomad_simulations.schema_packages.model_system import GlobalCrystalSymmetry
 
 from nomad_topology_normalizer.normalizers.symmetry_adapter import (
     apply_symmetry_data_to_results_symmetry,
@@ -125,6 +126,79 @@ def test_complete_model_system_symmetry_provides_legacy_material_id_inputs():
         find_model_system_representation(model_system, 'conventional') is conventional
     )
     assert has_complete_model_system_symmetry(model_system)
+
+
+def test_crystal_system_is_derived_from_v2_lattice_type():
+    """The real v2 section has no `crystal_system`; it must come from `lattice_type`.
+
+    Built from `GlobalCrystalSymmetry` rather than a namespace so that a schema
+    rename breaks this test instead of silently emptying a search field.
+    """
+    model_system = SimpleNamespace(
+        symmetry=GlobalCrystalSymmetry(
+            space_group_number=227,
+            space_group_symbol='Fd-3m',
+            point_group_symbol='m-3m',
+            lattice_type='c - cubic',
+            lattice_centering='F - all faces centred',
+        ),
+        local_symmetry=None,
+    )
+
+    symmetry_data = from_model_system(model_system)
+
+    assert symmetry_data['crystal_system'] == 'cubic'
+    assert symmetry_data['bravais_lattice'] == 'cF'
+
+    target = Symmetry()
+    apply_symmetry_data_to_results_symmetry(target, symmetry_data)
+    assert target.crystal_system == 'cubic'
+    assert target.bravais_lattice == 'cF'
+
+
+def test_two_dimensional_lattice_type_has_no_legacy_equivalent():
+    """2D Pearson symbols are not enum members and must not be assigned."""
+    model_system = SimpleNamespace(
+        symmetry=GlobalCrystalSymmetry(
+            space_group_number=1,
+            space_group_symbol='P1',
+            point_group_symbol='1',
+            lattice_type='mp - oblique',
+            lattice_centering='p - primitive 2D/1D',
+        ),
+        local_symmetry=None,
+    )
+
+    symmetry_data = from_model_system(model_system)
+
+    assert symmetry_data['crystal_system'] is None
+    assert symmetry_data['bravais_lattice'] is None
+
+    # Would raise on the MEnum quantity if an out-of-enum value leaked through.
+    apply_symmetry_data_to_results_symmetry(Symmetry(), symmetry_data)
+
+
+def test_prototype_id_reaches_topology_symmetry_section():
+    """Topology nodes use `SymmetryNew`, which names the AFLOW id differently."""
+    symmetry_data = from_model_system(
+        SimpleNamespace(
+            symmetry=GlobalCrystalSymmetry(
+                space_group_number=225,
+                space_group_symbol='Fm-3m',
+                point_group_symbol='m-3m',
+                prototype_aflow_id='AB_cF8_225_a_b',
+            ),
+            local_symmetry=None,
+        )
+    )
+
+    topology_symmetry = SymmetryNew()
+    apply_symmetry_data_to_results_symmetry(topology_symmetry, symmetry_data)
+    assert topology_symmetry.prototype_label_aflow == 'AB_cF8_225_a_b'
+
+    material_symmetry = Symmetry()
+    apply_symmetry_data_to_results_symmetry(material_symmetry, symmetry_data)
+    assert material_symmetry.prototype_aflow_id == 'AB_cF8_225_a_b'
 
 
 def test_incomplete_local_symmetry_does_not_invent_wyckoff_sets():

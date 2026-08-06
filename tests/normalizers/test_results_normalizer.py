@@ -1295,9 +1295,34 @@ def test_data_schema_trajectory_uses_physical_time(archive_with_data_schema):
     assert np.asarray(time)[0] == pytest.approx(2.5e-12)
 
 
-def test_data_schema_does_not_merge_different_method_outputs(
+def test_data_schema_logs_trajectory_dropped_without_physical_time(
+    archive_with_data_schema, caplog
+):
+    """`time` only exists on TrajectoryOutputs; dropping it must not be silent."""
+    output = Outputs()
+    output.temperatures.append(SimTemperature(value=300 * ureg.kelvin))
+    output.potential_energies.append(SimPotentialEnergy(value=-5.0 * ureg.eV))
+    archive_with_data_schema.data.outputs.append(output)
+
+    caplog.clear()
+    ResultsNormalizer().normalize(archive_with_data_schema, LOGGER)
+
+    thermodynamic = archive_with_data_schema.results.properties.thermodynamic
+    assert thermodynamic is None or not thermodynamic.trajectory
+    assert any(
+        'skipping trajectory series without physical time' in record.message
+        for record in caplog.records
+    )
+
+
+def test_data_schema_keeps_each_method_on_the_representative_system(
     archive_with_data_schema,
 ):
+    """DFT and GW results on one system are legacy-equivalent side-by-side data.
+
+    Legacy `get_gw_workflow_properties` publishes both, labelled; the v2 path
+    must not collapse them onto whichever output happens to come last.
+    """
     simulation = archive_with_data_schema.data
     system = simulation.model_system[0]
     dft = DFT()
@@ -1319,9 +1344,76 @@ def test_data_schema_does_not_merge_different_method_outputs(
     ResultsNormalizer().normalize(archive_with_data_schema, LOGGER)
 
     electronic = archive_with_data_schema.results.properties.electronic
-    assert electronic.band_structure_electronic
-    assert electronic.band_structure_electronic[0].label == 'GW'
-    assert not electronic.dos_electronic
+    assert [
+        band_structure.label for band_structure in electronic.band_structure_electronic
+    ] == ['GW']
+    assert [dos.label for dos in electronic.dos_electronic] == ['DFT']
+
+
+def test_data_schema_drops_outputs_from_non_representative_systems(
+    archive_with_data_schema, caplog
+):
+    """Merging outputs across different systems stays forbidden."""
+    simulation = archive_with_data_schema.data
+    representative_system = simulation.model_system[0]
+    other_system = ModelSystem(type='bulk')
+    simulation.model_system.append(other_system)
+
+    representative_output = Outputs(model_system_ref=representative_system)
+    representative_output.electronic_band_gaps.append(
+        ElectronicBandGap(value=1.5 * ureg.eV)
+    )
+    simulation.outputs.append(representative_output)
+
+    other_output = Outputs(model_system_ref=other_system)
+    other_output.electronic_band_gaps.append(ElectronicBandGap(value=2.5 * ureg.eV))
+    simulation.outputs.append(other_output)
+
+    caplog.clear()
+    ResultsNormalizer().normalize(archive_with_data_schema, LOGGER)
+
+    electronic = archive_with_data_schema.results.properties.electronic
+    assert [band_gap.value.to('eV').magnitude for band_gap in electronic.band_gap] == [
+        1.5
+    ]
+    assert any(
+        'discarding electronic outputs from non-representative systems'
+        in record.message
+        for record in caplog.records
+    )
+
+
+@pytest.mark.skipif(not HAS_RUNSCHEMA, reason='requires runschema')
+def test_data_schema_gives_each_method_its_own_legacy_dos_references(
+    archive_with_data_schema,
+):
+    """Per-method DOS payloads must not overwrite each other's run references."""
+    simulation = archive_with_data_schema.data
+    system = simulation.model_system[0]
+    dft = DFT()
+    gw = GW()
+    simulation.model_method.extend([dft, gw])
+
+    for method, values in ((dft, [0.1, 0.2]), (gw, [0.3, 0.4])):
+        output = Outputs(model_system_ref=system, model_method_ref=method)
+        dos = ElectronicDensityOfStates(value=np.array(values) / ureg.eV)
+        dos.energies = Energy2(points=np.array([-1.0, 1.0]) * ureg.eV)
+        output.electronic_dos.append(dos)
+        simulation.outputs.append(output)
+
+    ResultsNormalizer().normalize(archive_with_data_schema, LOGGER)
+
+    serialized = archive_with_data_schema.m_to_dict()
+    dos_sections = serialized['results']['properties']['electronic']['dos_electronic']
+    assert [section['label'] for section in dos_sections] == ['DFT', 'GW']
+
+    references = [section['energies'] for section in dos_sections]
+    references += [ref for section in dos_sections for ref in section['total']]
+    assert len(set(references)) == len(references)
+    assert all(
+        archive_with_data_schema.m_resolve(reference) is not None
+        for reference in references
+    )
 
 
 @pytest.mark.skipif(not HAS_RUNSCHEMA, reason='requires runschema')

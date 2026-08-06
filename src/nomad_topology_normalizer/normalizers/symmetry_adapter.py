@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from ase.data import chemical_symbols
-from nomad.datamodel.results import WyckoffSet
+from nomad.datamodel.results import WyckoffSet, bravais_lattices, crystal_systems
 
 # TODO(migration): Keep adapter local to topology-normalizer during v2 migration.
 # TODO(migration): Re-evaluate elevation only after nomad-simulations/nomad-FAIR
@@ -38,6 +38,31 @@ def is_symmetry_data_minimally_complete(symmetry_data: dict[str, Any]) -> bool:
         and symmetry_data.get('space_group_symbol')
         and symmetry_data.get('point_group')
     )
+
+
+def _crystal_system_from_lattice_type(lattice_type: Any) -> str | None:
+    """Map a v2 `lattice_type` onto the legacy `crystal_system` enum.
+
+    `GlobalCrystalSymmetry` has no `crystal_system` quantity; it carries the
+    crystal family in Pearson-style `'<code> - <name>'` form (e.g. `'c - cubic'`).
+    Only the seven 3D names have a legacy-equivalent target, so the 2D/1D lattice
+    types (`'mp - oblique'`, `'hp - hexagonal 2D'`, ...) stay unmapped.
+    """
+    if not isinstance(lattice_type, str):
+        return None
+    crystal_system = lattice_type.split(' - ')[-1].strip().lower()
+    return crystal_system if crystal_system in crystal_systems else None
+
+
+def _legacy_bravais_lattice(bravais_lattice: Any) -> str | None:
+    """Keep only Pearson symbols that the legacy `bravais_lattice` enum accepts.
+
+    The v2 `bravais_lattice` property also reconstructs 2D/1D symbols such as
+    `'mpp'` or `'ocp'`, which are not enum members and would raise on assignment.
+    """
+    if not isinstance(bravais_lattice, str):
+        return None
+    return bravais_lattice if bravais_lattice in bravais_lattices else None
 
 
 def from_legacy_repr_symmetry(repr_symmetry: Any) -> dict[str, Any]:
@@ -88,8 +113,11 @@ def from_model_system(model_system: Any) -> dict[str, Any]:
     symmetry_data.update(
         hall_number=getattr(symmetry, 'hall_number', None),
         hall_symbol=getattr(symmetry, 'hall_symbol', None),
-        bravais_lattice=getattr(symmetry, 'bravais_lattice', None),
-        crystal_system=getattr(symmetry, 'crystal_system', None),
+        bravais_lattice=_legacy_bravais_lattice(
+            getattr(symmetry, 'bravais_lattice', None)
+        ),
+        crystal_system=getattr(symmetry, 'crystal_system', None)
+        or _crystal_system_from_lattice_type(getattr(symmetry, 'lattice_type', None)),
         space_group_number=getattr(symmetry, 'space_group_number', None),
         space_group_symbol=getattr(symmetry, 'space_group_symbol', None),
         point_group=getattr(symmetry, 'point_group_symbol', None),
@@ -156,10 +184,7 @@ def wyckoff_sets_from_model_system(model_system: Any) -> list[WyckoffSet] | None
 
     try:
         if not labels or not (
-            len(labels)
-            == len(letters)
-            == len(equivalent_atoms)
-            == len(multiplicities)
+            len(labels) == len(letters) == len(equivalent_atoms) == len(multiplicities)
         ):
             return None
     except TypeError:
@@ -214,21 +239,31 @@ def apply_symmetry_data_to_results_symmetry(
     if target_symmetry is None or symmetry_data is None:
         return
 
+    # `results.material.symmetry` (Symmetry) and topology `System.symmetry`
+    # (SymmetryNew) name the AFLOW prototype id differently, so each source field
+    # lists every legacy-equivalent target name and the first declared one wins.
+    # Without this the prototype id is silently dropped on topology nodes.
     field_map = {
-        'hall_number': 'hall_number',
-        'hall_symbol': 'hall_symbol',
-        'bravais_lattice': 'bravais_lattice',
-        'crystal_system': 'crystal_system',
-        'space_group_number': 'space_group_number',
-        'space_group_symbol': 'space_group_symbol',
-        'point_group': 'point_group',
-        'strukturbericht_designation': 'strukturbericht_designation',
-        'prototype_formula': 'prototype_formula',
-        'prototype_aflow_id': 'prototype_aflow_id',
-        'origin_shift': 'origin_shift',
-        'transformation_matrix': 'transformation_matrix',
+        'hall_number': ('hall_number',),
+        'hall_symbol': ('hall_symbol',),
+        'bravais_lattice': ('bravais_lattice',),
+        'crystal_system': ('crystal_system',),
+        'space_group_number': ('space_group_number',),
+        'space_group_symbol': ('space_group_symbol',),
+        'point_group': ('point_group',),
+        'strukturbericht_designation': ('strukturbericht_designation',),
+        # `SymmetryNew.prototype_name` carries the structure name (e.g. 'wurtzite'),
+        # not the prototype formula, so it is deliberately not a target here.
+        'prototype_formula': ('prototype_formula',),
+        'prototype_aflow_id': ('prototype_aflow_id', 'prototype_label_aflow'),
+        'origin_shift': ('origin_shift',),
+        'transformation_matrix': ('transformation_matrix',),
     }
-    for source_name, target_name in field_map.items():
+    for source_name, target_names in field_map.items():
         value = symmetry_data.get(source_name)
-        if value is not None and hasattr(target_symmetry, target_name):
-            setattr(target_symmetry, target_name, value)
+        if value is None:
+            continue
+        for target_name in target_names:
+            if hasattr(target_symmetry, target_name):
+                setattr(target_symmetry, target_name, value)
+                break

@@ -1028,9 +1028,65 @@ def test_topology_reuses_nomad_simulations_bulk_analysis(monkeypatch):
     assert material.material_id == expected_material_id
     assert conventional.material_id == material.material_id
     assert (
-        conventional.symmetry.space_group_number
-        == system.symmetry.space_group_number
+        conventional.symmetry.space_group_number == system.symmetry.space_group_number
     )
+    assert conventional.symmetry.crystal_system is not None
+
+
+def test_conventional_cell_publishes_viewer_geometry(monkeypatch):
+    """The structure viewer needs `atoms`; v2 representations carry no positions."""
+    archive = EntryArchive(metadata=EntryMetadata(), results=Results())
+    system = _make_bulk_model_system()
+    archive.data = Simulation(model_system=[system])
+    system.normalize(archive, LOGGER)
+
+    def fail_matid(*_args, **_kwargs):
+        raise AssertionError('topology normalizer fell back to the MatID topology')
+
+    monkeypatch.setattr(TopologyNormalizer, 'topology_matid', fail_matid)
+
+    TopologyNormalizer().normalize(archive, LOGGER)
+
+    conventional = next(
+        section
+        for section in archive.results.material.topology
+        if section.label == 'conventional cell'
+    )
+    expected_atoms = SymmetryAnalyzer(
+        system.to_ase_atoms(),
+        config.normalize.symmetry_tolerance,
+        config.normalize.flat_dim_threshold,
+    ).get_conventional_system()
+
+    assert conventional.atoms is not None
+    assert len(conventional.atoms.labels) == len(expected_atoms)
+    # n_atoms comes from the v2 Wyckoff multiplicities; it must agree with geometry.
+    assert conventional.n_atoms == len(expected_atoms)
+    assert conventional.cell.atomic_density is not None
+
+
+def test_conventional_cell_falls_back_when_viewer_geometry_is_unavailable(monkeypatch):
+    """A failed geometry recovery must not lose symmetry or material_id."""
+    archive = EntryArchive(metadata=EntryMetadata(), results=Results())
+    system = _make_bulk_model_system()
+    archive.data = Simulation(model_system=[system])
+    system.normalize(archive, LOGGER)
+
+    monkeypatch.setattr(
+        TopologyNormalizer, '_conventional_atoms_for_viewer', lambda _self: None
+    )
+
+    TopologyNormalizer().normalize(archive, LOGGER)
+
+    conventional = next(
+        section
+        for section in archive.results.material.topology
+        if section.label == 'conventional cell'
+    )
+    assert conventional.atoms is None
+    assert conventional.material_id is not None
+    assert conventional.cell is not None
+    assert conventional.symmetry.space_group_number is not None
 
 
 def test_complete_v2_bulk_symmetry_gets_material_id():

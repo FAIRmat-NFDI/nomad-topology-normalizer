@@ -1231,7 +1231,6 @@ class ResultsNormalizerBase:
         # with different explicit system/method references must not be combined.
         latest_band_gaps: list[BandGap] = []
         latest_dos_sections: list[DOSElectronic] = []
-        latest_dos_payload: list[dict] = []
         latest_band_structures: list[BandStructureElectronic] = []
         latest_greens_functions: list[GreensFunctionsElectronic] = []
         electronic_groups: dict[tuple[int | None, int | None], dict[str, Any]] = {}
@@ -1241,6 +1240,7 @@ class ResultsNormalizerBase:
         temperature_time: list[float] = []
         potential_energy_series: list[float] = []
         potential_energy_time: list[float] = []
+        outputs_dropped_without_time = 0
 
         representative_system = None
         try:
@@ -1415,17 +1415,13 @@ class ResultsNormalizerBase:
             for absorption in output.absorption_spectra or []:
                 mapped_spectrum = self._map_spectrum(absorption, 'unavailable')
                 if mapped_spectrum and method_label:
-                    mapped_spectrum.provenance = SpectraProvenance(
-                        label=method_label
-                    )
+                    mapped_spectrum.provenance = SpectraProvenance(label=method_label)
                 if mapped_spectrum:
                     spectra_sections.append(mapped_spectrum)
             for xas in output.xas_spectra or []:
                 mapped_spectrum = self._map_spectrum(xas, 'XAS')
                 if mapped_spectrum and method_label:
-                    mapped_spectrum.provenance = SpectraProvenance(
-                        label=method_label
-                    )
+                    mapped_spectrum.provenance = SpectraProvenance(label=method_label)
                 if mapped_spectrum:
                     spectra_sections.append(mapped_spectrum)
 
@@ -1473,36 +1469,70 @@ class ResultsNormalizerBase:
                 potential_energy_series.append(float(energy_source.value.magnitude))
                 potential_energy_time.append(point_time)
 
+            if point_time is None and (temperatures or energy_source is not None):
+                outputs_dropped_without_time += 1
+
+        if outputs_dropped_without_time:
+            # `time` only exists on `TrajectoryOutputs`. A trajectory axis cannot be
+            # invented from the output index, so the series is dropped rather than
+            # plotted against a fabricated time - but never silently.
+            self.logger.warning(
+                'skipping trajectory series without physical time; '
+                'temperature/energy outputs are only mapped for TrajectoryOutputs '
+                'carrying `time`',
+                n_outputs=outputs_dropped_without_time,
+            )
+
+        selected_groups: list[dict[str, Any]] = []
         if electronic_groups:
-            # Prefer the representative system, then explicit provenance, then the
-            # latest output group. All electronic properties come from this one group.
-            def _group_score(group: dict[str, Any]) -> tuple[int, int, int, int]:
-                return (
-                    int(
-                        representative_system is not None
-                        and group['model_system_ref'] is representative_system
-                    ),
-                    int(group['model_method_ref'] is not None),
-                    int(group['model_system_ref'] is not None),
-                    group['last_index'],
+            # Outputs describing different systems must not be combined. Different
+            # methods on the same system are a different matter: legacy
+            # `get_gw_workflow_properties` publishes DFT and GW results side by
+            # side, so keep one labelled section per method instead of one overall.
+            def _system_key(group: dict[str, Any]) -> int | None:
+                system_ref = group['model_system_ref']
+                return id(system_ref) if system_ref is not None else None
+
+            candidate_groups = [
+                group
+                for group in electronic_groups.values()
+                if group['model_system_ref'] is None
+                or (
+                    representative_system is not None
+                    and group['model_system_ref'] is representative_system
                 )
+            ]
+            if not candidate_groups:
+                # Nothing points at the representative system, so fall back to the
+                # single most recent system rather than mixing systems.
+                newest_group = max(
+                    electronic_groups.values(), key=lambda group: group['last_index']
+                )
+                newest_system_key = _system_key(newest_group)
+                candidate_groups = [
+                    group
+                    for group in electronic_groups.values()
+                    if _system_key(group) == newest_system_key
+                ]
 
-            selected_group = max(electronic_groups.values(), key=_group_score)
-            latest_band_gaps = selected_group['band_gaps']
-            latest_dos_sections = selected_group['dos_sections']
-            latest_dos_payload = selected_group['dos_payload']
-            latest_band_structures = selected_group['band_structures']
-            latest_greens_functions = selected_group['greens_functions']
+            # One section per method, in output order; a repeated method keeps its
+            # most recent outputs.
+            groups_by_method: dict[str | None, dict[str, Any]] = {}
+            for group in sorted(candidate_groups, key=lambda g: g['last_index']):
+                groups_by_method[self._method_label(group['model_method_ref'])] = group
+            selected_groups = list(groups_by_method.values())
 
-            if len(electronic_groups) > 1:
+            for group in selected_groups:
+                latest_band_gaps.extend(group['band_gaps'])
+                latest_dos_sections.extend(group['dos_sections'])
+                latest_band_structures.extend(group['band_structures'])
+                latest_greens_functions.extend(group['greens_functions'])
+
+            discarded_groups = len(electronic_groups) - len(selected_groups)
+            if discarded_groups:
                 self.logger.warning(
-                    'discarding alternate electronic output source groups',
-                    selected_method=getattr(
-                        getattr(selected_group['model_method_ref'], 'm_def', None),
-                        'name',
-                        None,
-                    ),
-                    discarded_groups=len(electronic_groups) - 1,
+                    'discarding electronic outputs from non-representative systems',
+                    discarded_groups=discarded_groups,
                 )
 
         if not (
@@ -1532,32 +1562,42 @@ class ResultsNormalizerBase:
 
         # Prefer run/calculation DOS compatibility paths when runschema is available,
         # so legacy GUI resolvers can follow runschema-typed references robustly.
-        if runschema and latest_dos_sections and latest_dos_payload:
+        if runschema and latest_dos_sections:
             compatibility_target = self._ensure_legacy_run_calculation(archive)
             if compatibility_target is not None:
                 calculation, run_index, calculation_index = compatibility_target
                 calculation.dos_electronic = []
-                run_total_refs: list[str] = []
-                for idx, dos_entry in enumerate(latest_dos_payload):
-                    legacy_dos = runschema.calculation.Dos()
-                    legacy_dos.energies = dos_entry['energies_points']
+                calculation_path = f'/run/{run_index}/calculation/{calculation_index}'
+                # Each method contributes its own legacy Dos sections, so indices
+                # run across the shared list instead of restarting per group.
+                for group in selected_groups:
+                    dos_sections = group['dos_sections']
+                    dos_payload = group['dos_payload']
+                    if not (dos_sections and dos_payload):
+                        continue
+                    energies_index = len(calculation.dos_electronic)
+                    run_total_refs: list[str] = []
+                    for dos_entry in dos_payload:
+                        legacy_dos = runschema.calculation.Dos()
+                        legacy_dos.energies = dos_entry['energies_points']
 
-                    legacy_total = runschema.calculation.DosValues()
-                    legacy_total.value = dos_entry['values']
-                    legacy_total.spin = int(dos_entry.get('spin_channel', 0) or 0)
-                    legacy_dos.total.append(legacy_total)
+                        legacy_total = runschema.calculation.DosValues()
+                        legacy_total.value = dos_entry['values']
+                        legacy_total.spin = int(dos_entry.get('spin_channel', 0) or 0)
+                        legacy_dos.total.append(legacy_total)
 
-                    calculation.dos_electronic.append(legacy_dos)
-                    run_total_refs.append(
-                        f'/run/{run_index}/calculation/{calculation_index}'
-                        f'/dos_electronic/{idx}/total/0'
+                        run_total_refs.append(
+                            f'{calculation_path}/dos_electronic'
+                            f'/{len(calculation.dos_electronic)}/total/0'
+                        )
+                        calculation.dos_electronic.append(legacy_dos)
+
+                    dos_sections[
+                        0
+                    ].energies = (
+                        f'{calculation_path}/dos_electronic/{energies_index}/energies'
                     )
-
-                latest_dos_sections[0].energies = (
-                    f'/run/{run_index}/calculation/{calculation_index}'
-                    '/dos_electronic/0/energies'
-                )
-                latest_dos_sections[0].total = run_total_refs
+                    dos_sections[0].total = run_total_refs
 
         # `results.properties.electronic.band_structure_electronic.segment` is a
         # reference-typed quantity. For valid references, materialize compatible

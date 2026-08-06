@@ -689,6 +689,42 @@ class TopologyNormalizer(Normalizer):
 
         return result
 
+    def _conventional_atoms_for_viewer(self) -> Atoms | None:
+        """Conventional-cell geometry for the GUI structure viewer.
+
+        The v2 conventional `Representation` carries `lattice_vectors` but neither
+        positions nor per-site species, so the viewer payload cannot be built from
+        v2 data alone. This recovers geometry only - symmetry and `material_id`
+        still come from the values `nomad-simulations` already normalized and are
+        never recomputed here.
+
+        TODO(migration): drop this once `resolve_analyzed_cell` publishes the
+        conventional cell's fractional coordinates and atomic numbers.
+        """
+        try:
+            atoms = self.repr_system.to_ase_atoms()
+        except Exception:
+            return None
+        if not atoms or len(atoms) == 0:
+            return None
+
+        try:
+            analyzed_system = atoms.copy()
+            analyzed_system.set_pbc(True)
+            conventional_atoms = SymmetryAnalyzer(
+                analyzed_system,
+                config.normalize.symmetry_tolerance,
+                config.normalize.flat_dim_threshold,
+            ).get_conventional_system()
+            conventional_atoms.set_pbc(True)
+            return conventional_atoms
+        except Exception as error:
+            self.logger.warning(
+                'could not build conventional cell geometry for the structure viewer',
+                exc_info=error,
+            )
+            return None
+
     def topology_v2_symmetry(self, material: Material) -> list[System] | None:
         """Build bulk topology from existing v2 symmetry and representations."""
         if getattr(self.repr_system, 'type', None) != 'bulk':
@@ -714,9 +750,8 @@ class TopologyNormalizer(Normalizer):
                 for wyckoff_set in wyckoff_sets
                 for _ in wyckoff_set.indices
             ]
-            # This transient ASE object is used only by the existing Cell adapter
-            # to calculate lattice parameters and densities. No positions are
-            # published because v2 representations do not currently carry them.
+            # Fallback cell carrier: enough for the Cell adapter to derive lattice
+            # parameters and densities, but it has no meaningful positions.
             cell_atoms = Atoms(
                 symbols=conventional_symbols,
                 cell=np.asarray(lattice_vectors),
@@ -724,6 +759,19 @@ class TopologyNormalizer(Normalizer):
             )
         except Exception:
             return None
+
+        n_conventional_atoms = len(conventional_symbols)
+        viewer_atoms = self._conventional_atoms_for_viewer()
+        if viewer_atoms is not None and len(viewer_atoms) != n_conventional_atoms:
+            # The two counts derive from the same space group, so a mismatch means
+            # the v2 Wyckoff payload and the geometry disagree. Trust neither for
+            # the viewer rather than publishing a cell that contradicts material_id.
+            self.logger.warning(
+                'conventional cell atom count disagrees with v2 Wyckoff multiplicities',
+                n_wyckoff_atoms=n_conventional_atoms,
+                n_geometry_atoms=len(viewer_atoms),
+            )
+            viewer_atoms = None
 
         topology: dict[str, System] = {}
         particles = getattr(self.repr_system, 'particle_states', None)
@@ -750,11 +798,14 @@ class TopologyNormalizer(Normalizer):
             structural_type='bulk',
             description=conventional_description,
             system_relation=Relation(type='conventional_cell'),
-            n_atoms=sum(len(wyckoff_set.indices) for wyckoff_set in wyckoff_sets),
+            n_atoms=n_conventional_atoms,
             material_id=material_id,
             symmetry=self._symmetry_from_data(symmetry_data),
-            cell=cell_from_ase_atoms(cell_atoms),
+            cell=cell_from_ase_atoms(viewer_atoms or cell_atoms),
         )
+        if viewer_atoms is not None:
+            # The molecular visualizer resolves this runschema-typed field.
+            conventional_system.atoms = nomad_atoms_from_ase_atoms(viewer_atoms)
         add_system(conventional_system, topology, subsystem)
         material.material_id = material_id
         return list(topology.values())
