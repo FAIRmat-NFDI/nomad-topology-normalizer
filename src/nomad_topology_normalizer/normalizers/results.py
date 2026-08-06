@@ -165,11 +165,6 @@ elements = set(ase.data.chemical_symbols)
 
 V2_COMPATIBILITY_ANNOTATION = 'nomad_topology_normalizer_v2_compatibility'
 
-# Recognize sections written by the first compatibility implementation so that
-# one normalization pass migrates them to the invisible annotation marker.
-_LEGACY_V2_COMPATIBILITY_LABEL = 'nomad-topology-normalizer:v2-compatibility'
-_LEGACY_V2_COMPATIBILITY_RUN_ID = f'{_LEGACY_V2_COMPATIBILITY_LABEL}:run'
-
 
 def valid_array(array: Any) -> bool:
     """Checks if the given variable is a non-empty array."""
@@ -650,25 +645,13 @@ class ResultsNormalizerBase:
 
     @staticmethod
     def _is_compatibility_section(section) -> bool:
-        try:
-            if V2_COMPATIBILITY_ANNOTATION in section.m_annotations:
-                return True
+        """Whether this normalizer generated the section on an earlier pass.
 
-            # Backward-compatible cleanup for archives produced by the initial
-            # visible-marker implementation. New sections never use these fields.
-            raw_id = getattr(section, 'raw_id', None)
-            if raw_id == _LEGACY_V2_COMPATIBILITY_RUN_ID:
-                return True
-            label = getattr(section, 'label', None)
-            if isinstance(label, str) and label.startswith(
-                _LEGACY_V2_COMPATIBILITY_LABEL
-            ):
-                return True
-            provenance = getattr(section, 'provenance', None)
-            provenance_label = getattr(provenance, 'label', None)
-            return isinstance(provenance_label, str) and provenance_label.startswith(
-                _LEGACY_V2_COMPATIBILITY_LABEL
-            )
+        The marker is an annotation rather than a quantity, so nothing the
+        parser owns is inspected and no user-facing field is claimed.
+        """
+        try:
+            return V2_COMPATIBILITY_ANNOTATION in section.m_annotations
         except Exception:
             return False
 
@@ -739,12 +722,8 @@ class ResultsNormalizerBase:
         )
         if run is None:
             run = runschema.run.Run()
-            self._mark_compatibility_section(run)
             archive.run.append(run)
-        else:
-            self._mark_compatibility_section(run)
-            if getattr(run, 'raw_id', None) == _LEGACY_V2_COMPATIBILITY_RUN_ID:
-                run.m_set('raw_id', None)
+        self._mark_compatibility_section(run)
 
         calculations = run.calculation
         if calculations and len(calculations) > 0:
@@ -1199,12 +1178,6 @@ class ResultsNormalizerBase:
             for compatibility_run in archive.run or []:
                 if not self._is_compatibility_section(compatibility_run):
                     continue
-                self._mark_compatibility_section(compatibility_run)
-                if (
-                    getattr(compatibility_run, 'raw_id', None)
-                    == _LEGACY_V2_COMPATIBILITY_RUN_ID
-                ):
-                    compatibility_run.m_set('raw_id', None)
                 for compatibility_calculation in compatibility_run.calculation or []:
                     self._mark_compatibility_section(compatibility_calculation)
                     compatibility_calculation.dos_electronic = []

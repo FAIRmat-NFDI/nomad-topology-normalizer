@@ -1475,6 +1475,8 @@ def test_data_schema_preserves_legacy_calculation_and_result_sections():
     assert archive.run[0] is legacy_run
     assert legacy_calculation.dos_electronic[0] is legacy_dos
     assert legacy_calculation.band_structure_electronic[0] is legacy_band_structure
+    # The generated run is identified by annotation alone; no user-facing
+    # quantity is claimed to mark it.
     assert archive.run[1].raw_id is None
     assert V2_COMPATIBILITY_ANNOTATION in archive.run[1].m_annotations
     assert any(section.label == 'parser-owned' for section in electronic.dos_electronic)
@@ -1499,7 +1501,6 @@ def test_data_schema_preserves_legacy_calculation_and_result_sections():
     )
     assert archive.m_resolve(generated_dos['energies']) is not None
     assert all(archive.m_resolve(ref) is not None for ref in generated_dos['total'])
-    assert 'nomad-topology-normalizer:v2-compatibility' not in repr(serialized)
 
 
 def test_data_schema_output_mapping_is_idempotent(archive_with_data_schema):
