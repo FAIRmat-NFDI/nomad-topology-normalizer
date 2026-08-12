@@ -413,10 +413,14 @@ class ResultsNormalizerBase:
             return None
 
         def _energy_threshold_for_results(value):
-            if getattr(value, 'units', None) is None:
-                return value
             try:
-                return value.to('joule').magnitude
+                if getattr(value, 'units', None) is not None:
+                    return value.to('joule').magnitude
+                # Some released nomad-simulations versions accept Pint input
+                # for flexible-unit quantities but expose only the original
+                # magnitude. For SCF energy thresholds, legacy results expect
+                # eV-like values to be converted into their joule storage unit.
+                return (value * ureg.eV).to('joule').magnitude
             except Exception:
                 return value
 
