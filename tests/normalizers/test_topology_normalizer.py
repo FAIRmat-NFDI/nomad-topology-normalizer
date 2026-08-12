@@ -19,7 +19,7 @@ from nomad_simulations.schema_packages.model_system import (
     ModelSystem,
 )
 
-from nomad_results_normalizer.normalizers.common import material_id_bulk
+from nomad_results_normalizer.normalizers.common import NOMADAtoms, material_id_bulk
 from nomad_results_normalizer.normalizers.symmetry_adapter import (
     wyckoff_sets_from_model_system,
 )
@@ -993,6 +993,86 @@ def test_topology_consumes_complete_v2_bulk_symmetry_without_matid(monkeypatch):
     assert result[-1].symmetry.space_group_number == 166
     assert result[-1].cell is not None
     assert result[-1].cell.atomic_density is not None
+
+
+def test_data_schema_topology_replaces_existing_legacy_topology(monkeypatch):
+    archive = EntryArchive(metadata=EntryMetadata())
+    archive.results = Results(material=Material())
+    archive.results.material.topology.append(
+        System(label='legacy', system_relation=Relation(type='root'))
+    )
+    archive.data = Simulation(model_system=[_make_bulk_model_system()])
+
+    def topology_calculation(_self):
+        atoms = NOMADAtoms(labels=['Si'])
+        return [
+            System(
+                label='data-schema',
+                system_relation=Relation(type='root'),
+                atoms=atoms,
+            )
+        ]
+
+    monkeypatch.setattr(
+        TopologyNormalizer, 'topology_calculation', topology_calculation
+    )
+
+    TopologyNormalizer().normalize(archive, LOGGER)
+
+    assert [system.label for system in archive.results.material.topology] == [
+        'data-schema'
+    ]
+
+
+def test_data_schema_topology_without_atoms_restores_existing_legacy_topology(
+    monkeypatch,
+    caplog,
+):
+    archive = EntryArchive(metadata=EntryMetadata())
+    archive.results = Results(material=Material())
+    archive.results.material.topology.append(
+        System(label='legacy', system_relation=Relation(type='root'))
+    )
+    archive.data = Simulation(model_system=[_make_bulk_model_system()])
+
+    def topology_calculation(_self):
+        return [System(label='data-schema', system_relation=Relation(type='root'))]
+
+    monkeypatch.setattr(
+        TopologyNormalizer, 'topology_calculation', topology_calculation
+    )
+    caplog.clear()
+
+    TopologyNormalizer().normalize(archive, LOGGER)
+
+    assert [system.label for system in archive.results.material.topology] == ['legacy']
+    assert any(
+        'Data-schema topology does not contain atoms or atoms_ref' in record.message
+        for record in caplog.records
+    )
+
+
+def test_data_schema_topology_restores_existing_legacy_topology_when_empty(
+    monkeypatch,
+):
+    archive = EntryArchive(metadata=EntryMetadata())
+    archive.results = Results(material=Material())
+    archive.results.material.topology.append(
+        System(label='legacy', system_relation=Relation(type='root'))
+    )
+    archive.data = Simulation(model_system=[_make_bulk_model_system()])
+
+    monkeypatch.setattr(TopologyNormalizer, 'topology_calculation', lambda _self: None)
+    monkeypatch.setattr(
+        TopologyNormalizer, 'topology_v2_symmetry', lambda _self, _material: None
+    )
+    monkeypatch.setattr(
+        TopologyNormalizer, 'topology_matid', lambda _self, _material: None
+    )
+
+    TopologyNormalizer().normalize(archive, LOGGER)
+
+    assert [system.label for system in archive.results.material.topology] == ['legacy']
 
 
 def test_topology_reuses_nomad_simulations_bulk_analysis(monkeypatch):

@@ -29,44 +29,41 @@ NORMALIZATION CASCADE ARCHITECTURE
 
 Plugin Entry Point: results_normalizer_plugin (level 3)
     │
-    └─── Schema Detection: _is_data_schema(archive)
+    ├─── Detect data-schema availability: _is_data_schema(archive)
+    │
+    ├─── Always attempt: _normalize_with_legacy()
+    │             │
+    │             └─ Delegates to
+    │                nomad.normalizing.results.ResultsNormalizer
+    │                   │
+    │                   └─ Handles: v1 run schema and existing NOMAD behavior
+    │
+    └─── Then, when data-schema is available:
             │
-            ├─ Checks: archive.data exists?
-            │          archive.data.model_system exists?
-            │
-            ├─ Data schema → _normalize_with_data_schema()
-            │                 │
-            │                 ├─ Initialize results sections
-            │                 └─ TopologyNormalizer.normalize()
-            │
-            └─ Legacy Schema → _normalize_with_legacy()
-                                  │
-                                  └─ Delegates to
-                                     nomad.normalizing.results.ResultsNormalizer
-                                        │
-                                        └─ Handles: v1 run schema
-                                                    Old data schemas
-                                                    Any other legacy formats
+            └─ Data schema → _normalize_with_data_schema()
+                              │
+                              ├─ Initialize results sections
+                              └─ TopologyNormalizer.normalize()
 
 Schema Version Detection
 ------------------------
 
-The _is_data_schema() method validates that an entry uses the
+The _is_data_schema() method checks whether an entry additionally uses the
 nomad-simulations data-schema path by checking:
 1. archive.data attribute exists
 2. archive.data.model_system attribute exists
 
-All other cases (including v1 run schema, old data schemas, or empty archives)
-are delegated to the legacy normalizer which handles them appropriately.
+All archives run legacy normalization. Entries with nomad-simulations data run
+the plugin's data-schema normalization afterward.
 
 Design Principles
 -----------------
 
-- Single entry point: Avoids double execution and cascade ordering issues
-- Precise detection: Only simulation data-schema archives trigger new path
-- Automatic fallback: Legacy handles all non-data-schema cases without explicit checks
+- Single entry point: Keeps legacy and data-schema result population ordered
+- Precise detection: Only simulation data-schema archives trigger the plugin pass
+- Backward compatibility: Legacy normalization still runs for all archives
 - Clean separation: data-schema code stays in plugin, legacy code stays in nomad-FAIR
-- No breaking changes: Existing entries continue to work via legacy path
+- No breaking changes: Existing entries continue to receive legacy results
 """
 
 import os
@@ -210,8 +207,9 @@ class ResultsNormalizerBase:
     The entry point creates a proper subclass dynamically. See class docstring above.
 
     Strategy:
-    1. Check if archive.data exists (data schema) → use new normalization cascade
-    2. If not, fall back to archive.run (v1 schema) → delegate to legacy normalizer
+    1. Always run the legacy NOMAD FAIR ResultsNormalizer first.
+    2. If nomad-simulations data is present, run the data-schema cascade after
+       legacy normalization to add/override data-schema-derived results.
 
     This ensures backward compatibility during the transition period.
     """
@@ -221,32 +219,33 @@ class ResultsNormalizerBase:
 
     def normalize(self, archive: EntryArchive, logger=None) -> None:
         self.entry_archive = archive
-        legacy_delegated = False
 
         # Setup logger
         if logger is not None:
             self.logger = logger.bind(normalizer=self.__class__.__name__)
 
-        # ========== LOGICAL SWITCH: simulation data schema vs legacy ==========
-        # Check if nomad-simulations data schema is present.
+        # ========== LOGICAL SWITCH: legacy baseline plus data-schema pass ==========
+        # Check first so a legacy failure does not prevent data-schema fallback.
         data_schema_info = self._is_data_schema(archive)
+
+        self.logger.info('Running legacy results normalization')
+        try:
+            self._normalize_with_legacy(archive, self.logger)
+        except Exception as error:
+            if not data_schema_info:
+                raise
+            self.logger.warning(
+                'Legacy results normalization failed before data-schema pass; '
+                'continuing with data-schema results normalization.',
+                exc_info=error,
+            )
 
         if data_schema_info:
             system_v2 = data_schema_info if data_schema_info is not True else None
-            # NEW PATH: Use data-schema normalization (this plugin)
-            self.logger.info('Using data-schema results normalization')
+            self.logger.info('Running data-schema results normalization')
             self._normalize_with_data_schema(archive, self.logger, system_v2)
         else:
-            # LEGACY PATH: Delegate to legacy normalizer (handles run schema,
-            # old data schema, etc.)
-            self.logger.info('Falling back to legacy results normalization')
-            self._normalize_with_legacy(archive, self.logger)
-            legacy_delegated = True
-
-        # Legacy delegate handles measurements itself.
-        if not legacy_delegated:
-            for measurement in self.entry_archive.measurement:
-                self.normalize_measurement(measurement)
+            self.logger.info('Skipping data-schema results normalization')
 
         self.entry_archive = None
         self.section_run = None
@@ -1707,11 +1706,11 @@ class ResultsNormalizerBase:
         self._log_unmapped_output_groups(outputs)
 
     def _normalize_with_legacy(self, archive: EntryArchive, logger) -> None:
-        """Normalization cascade for legacy schemas (v1 run schema, old data
-        schemas, etc.).
+        """Run the legacy NOMAD FAIR ResultsNormalizer baseline.
 
-        Delegates to the old ResultsNormalizer from nomad-FAIR which handles
-        all legacy cases.
+        This runs before the plugin data-schema pass so existing run-schema
+        behavior remains available when parsers populate both archive.run and
+        archive.data.
         """
         from nomad.normalizing.results import (
             ResultsNormalizer as LegacyResultsNormalizer,
