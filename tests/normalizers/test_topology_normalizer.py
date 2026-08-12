@@ -20,6 +20,9 @@ from nomad_simulations.schema_packages.model_system import (
 )
 
 from nomad_results_normalizer.normalizers.common import material_id_bulk
+from nomad_results_normalizer.normalizers.symmetry_adapter import (
+    wyckoff_sets_from_model_system,
+)
 from nomad_results_normalizer.normalizers.topology import (
     TopologyNormalizer,
     add_system,
@@ -1004,14 +1007,9 @@ def test_topology_reuses_nomad_simulations_bulk_analysis(monkeypatch):
     assert system.local_symmetry is not None
     assert system.representations
 
-    legacy_analyzer = SymmetryAnalyzer(
-        system.to_ase_atoms(),
-        config.normalize.symmetry_tolerance,
-        config.normalize.flat_dim_threshold,
-    )
     expected_material_id = material_id_bulk(
-        legacy_analyzer.get_space_group_number(),
-        legacy_analyzer.get_wyckoff_sets_conventional(),
+        system.symmetry.space_group_number,
+        wyckoff_sets_from_model_system(system),
     )
 
     def fail_matid(*_args, **_kwargs):
