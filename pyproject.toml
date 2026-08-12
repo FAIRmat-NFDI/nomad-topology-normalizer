@@ -26,7 +26,7 @@ maintainers = [
 license = { file = "LICENSE" }
 dependencies = [
     "nomad-lab>=1.3.10",
-    "nomad-simulations>=0.7.1",
+    "nomad-simulations>=0.7.0",
     "nomad-schema-plugin-run>=1.0.5",
     "nomad-schema-plugin-simulation-workflow>=1.0.11",
     "ase>=3.25.0",
