@@ -412,6 +412,14 @@ class ResultsNormalizerBase:
                         return threshold_change
             return None
 
+        def _energy_threshold_for_results(value):
+            if getattr(value, 'units', None) is None:
+                return value
+            try:
+                return value.to('joule').magnitude
+            except Exception:
+                return value
+
         def _map_dft_fields(
             model_method, simulation_method: DFT, program_name: str | None
         ) -> None:
@@ -451,7 +459,9 @@ class ResultsNormalizerBase:
 
             scf_threshold = _scf_threshold_from_model_method(model_method)
             if scf_threshold is not None:
-                simulation_method.scf_threshold_energy_change = scf_threshold
+                simulation_method.scf_threshold_energy_change = (
+                    _energy_threshold_for_results(scf_threshold)
+                )
 
             xc = model_method.xc
             exact_exchange = getattr(xc, 'global_exact_exchange', None) if xc else None

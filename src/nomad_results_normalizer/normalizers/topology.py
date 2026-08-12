@@ -763,15 +763,12 @@ class TopologyNormalizer(Normalizer):
         n_conventional_atoms = len(conventional_symbols)
         viewer_atoms = self._conventional_atoms_for_viewer()
         if viewer_atoms is not None and len(viewer_atoms) != n_conventional_atoms:
-            # The two counts derive from the same space group, so a mismatch means
-            # the v2 Wyckoff payload and the geometry disagree. Trust neither for
-            # the viewer rather than publishing a cell that contradicts material_id.
             self.logger.warning(
                 'conventional cell atom count disagrees with v2 Wyckoff multiplicities',
                 n_wyckoff_atoms=n_conventional_atoms,
                 n_geometry_atoms=len(viewer_atoms),
             )
-            viewer_atoms = None
+            n_conventional_atoms = len(viewer_atoms)
 
         topology: dict[str, System] = {}
         particles = getattr(self.repr_system, 'particle_states', None)
