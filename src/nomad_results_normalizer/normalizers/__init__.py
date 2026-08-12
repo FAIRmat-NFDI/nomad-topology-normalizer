@@ -35,7 +35,7 @@ class ResultsNormalizerEntryPoint(NormalizerEntryPoint):
         from nomad.normalizing import Normalizer as BaseNormalizer
 
         # Import implementation (plain class without Normalizer inheritance)
-        from nomad_topology_normalizer.normalizers.results import ResultsNormalizerBase
+        from nomad_results_normalizer.normalizers.results import ResultsNormalizerBase
 
         # Create the actual class with proper inheritance using type()
         # This combines BaseNormalizer (proper base class) with

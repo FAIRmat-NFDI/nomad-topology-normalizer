@@ -51,6 +51,7 @@ class Normalizer:
             The representative ModelSystem or None if no systems exist
         """
         result = None
+        model_systems = None
 
         # Try to find workflow information and select the representative system
         # based on it
@@ -61,35 +62,41 @@ class Normalizer:
                 iscc = workflow.results.calculation_result_ref
                 system = iscc.system_ref
                 if system is not None:
-                    result = iscc
+                    result = system
             except Exception:
                 pass
 
         if result is None:
             # Check if archive.data exists and has non-empty model_system
-            if (
-                not archive.data
-                or not hasattr(archive.data, 'model_system')
-                or len(archive.data.model_system) == 0
-            ):
+            if not archive.data:
                 self.logger.warning('no model_system found in archive.data')
                 return None
 
-            model_systems = archive.data.model_system
+            try:
+                model_systems = archive.data.model_system
+            except Exception:
+                self.logger.warning('no model_system found in archive.data')
+                return None
+
+            if len(model_systems) == 0:
+                self.logger.warning('no model_system found in archive.data')
+                return None
 
             # Try to use representative_system_index if it exists
-            if hasattr(archive.data, 'representative_system_index'):
+            try:
                 rep_idx = archive.data.representative_system_index
-                # Handle negative index (e.g., -1 for last element)
-                if rep_idx is not None and (
-                    -len(model_systems) <= rep_idx < len(model_systems)
-                ):
-                    result = model_systems[rep_idx]
+            except Exception:
+                rep_idx = None
+            # Handle negative index (e.g., -1 for last element)
+            if rep_idx is not None and (
+                -len(model_systems) <= rep_idx < len(model_systems)
+            ):
+                result = model_systems[rep_idx]
 
         # Fallback: find system with is_representative flag
         if result is None:
             for system in model_systems:
-                if hasattr(system, 'is_representative') and system.is_representative:
+                if system.is_representative:
                     result = system
                     break
 

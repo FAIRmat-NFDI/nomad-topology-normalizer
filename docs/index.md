@@ -1,4 +1,4 @@
-# Welcome to the `nomad_topology_normalizer` documentation
+# Welcome to the `nomad-results-normalizer` documentation
 
 Topology Normalizer
 

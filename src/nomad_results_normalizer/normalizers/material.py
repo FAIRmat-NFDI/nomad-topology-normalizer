@@ -27,16 +27,24 @@ from nomad import atomutils
 from nomad.atomutils import Formula
 from nomad.datamodel.results import Material, Symmetry, structure_name_map
 
-from nomad_topology_normalizer.normalizers.common import (
+from nomad_results_normalizer.normalizers.common import (
     material_id_1d,
     material_id_2d,
     material_id_bulk,
+)
+from nomad_results_normalizer.normalizers.symmetry_adapter import (
+    apply_symmetry_data_to_results_symmetry,
+    from_legacy_repr_symmetry,
+    from_model_system,
+    is_symmetry_data_minimally_complete,
+    wyckoff_sets_from_model_system,
 )
 
 
 class MaterialNormalizer:
     def __init__(
         self,
+        *,
         entry_archive,
         repr_system,
         repr_symmetry,
@@ -59,30 +67,148 @@ class MaterialNormalizer:
         self.structural_type = None
         self.logger = logger
 
-    def material(self) -> Material:
+    @staticmethod
+    def _merge_missing_symmetry_data(
+        primary: dict[str, object], fallback: dict[str, object]
+    ) -> dict[str, object]:
+        """Merge fallback values only into fields missing from primary."""
+        merged = dict(primary)
+        for key, value in fallback.items():
+            if merged.get(key) is None and value is not None:
+                merged[key] = value
+        return merged
+
+    @staticmethod
+    def _dimensionality_to_results_enum(value) -> str | None:
+        """Convert various dimensionality representations to results enum values."""
+        if value is None:
+            return None
+        if isinstance(value, np.generic):
+            value = value.item()
+        if isinstance(value, (int, np.integer)):
+            return {0: '0D', 1: '1D', 2: '2D', 3: '3D'}.get(int(value))
+        if isinstance(value, str):
+            normalized = value.strip().upper()
+            if normalized in {'0D', '1D', '2D', '3D'}:
+                return normalized
+            if normalized in {'0', '1', '2', '3'}:
+                return {0: '0D', 1: '1D', 2: '2D', 3: '3D'}.get(int(normalized))
+        return None
+
+    @staticmethod
+    def _read_attr_or_key(container, name: str):
+        if container is None:
+            return None
+        if isinstance(container, dict):
+            return container.get(name)
+        return getattr(container, name, None)
+
+    @classmethod
+    def _labels_from_atoms_like(cls, atoms_like) -> list[str]:
+        """Extract chemical symbols from atoms-like data containers."""
+        if atoms_like is None:
+            return []
+
+        labels = cls._read_attr_or_key(atoms_like, 'labels')
+        if labels:
+            return [str(label) for label in labels if label]
+
+        atomic_numbers = cls._read_attr_or_key(atoms_like, 'atomic_numbers')
+        if atomic_numbers:
+            symbols = []
+            for atomic_number in atomic_numbers:
+                try:
+                    idx = int(atomic_number)
+                except Exception:
+                    continue
+                if 0 < idx < len(ase.data.chemical_symbols):
+                    symbols.append(ase.data.chemical_symbols[idx])
+            if symbols:
+                return symbols
+
+        species = cls._read_attr_or_key(atoms_like, 'species')
+        if species:
+            symbols = []
+            for specie in species:
+                if isinstance(specie, str):
+                    symbols.append(specie)
+                else:
+                    try:
+                        idx = int(specie)
+                    except Exception:
+                        continue
+                    if 0 < idx < len(ase.data.chemical_symbols):
+                        symbols.append(ase.data.chemical_symbols[idx])
+            if symbols:
+                return symbols
+
+        return []
+
+    @classmethod
+    def _labels_from_topology_root(cls, material: Material) -> list[str]:
+        topology = material.topology
+        if not topology:
+            return []
+
+        root = topology[0]
+        atoms_ref = root.atoms_ref
+        labels = cls._labels_from_atoms_like(atoms_ref)
+        if labels:
+            return labels
+
+        atoms = root.atoms
+        return cls._labels_from_atoms_like(atoms)
+
+    def material(self, populate_topology: bool = True) -> Material:
         """Returns a populated Material subsection."""
         material = self.entry_archive.m_setdefault('results.material')
+        symbols = None
+        reduced_counts = None
 
         if self.repr_system:
             try:
                 # Get Hill formula from v2 schema
                 hill_formula = None
-                if (
-                    hasattr(self.repr_system, 'chemical_formula')
-                    and self.repr_system.chemical_formula
-                ):
+                labels = None
+                chemical_formula = getattr(self.repr_system, 'chemical_formula', None)
+                particle_states = getattr(self.repr_system, 'particle_states', None)
+                if chemical_formula:
                     hill_formula = self.repr_system.chemical_formula.hill
+
+                if not hill_formula and particle_states:
+                    labels = [
+                        ps.chemical_symbol
+                        for ps in particle_states
+                        if ps.chemical_symbol
+                    ]
+                if not labels:
+                    labels = self._labels_from_atoms_like(
+                        self._read_attr_or_key(self.repr_system, 'atoms')
+                    )
+                if not labels:
+                    labels = self._labels_from_topology_root(material)
+                if not hill_formula and labels:
+                    hill_formula = Formula(''.join(labels)).format('hill')
 
                 if not hill_formula:
                     self.logger.warning(
                         'no chemical formula available on representative system'
                     )
-                    return material
+                else:
+                    formula = Formula(hill_formula)
+                    formula.populate(material, descriptive_format='descriptive')
 
-                formula = Formula(hill_formula)
-                formula.populate(material, descriptive_format='descriptive')
-                self.structural_type = self.repr_system.type
-                material.structural_type = self.repr_system.type
+                self.structural_type = getattr(self.repr_system, 'type', None)
+                if self.structural_type:
+                    allowed_structural_types = set(
+                        Material.m_def.all_quantities['structural_type'].type
+                    )
+                    compatible_structural_type = {
+                        'molecule': 'molecule / cluster',
+                        'cluster': 'molecule / cluster',
+                    }.get(self.structural_type, self.structural_type)
+                    if compatible_structural_type in allowed_structural_types:
+                        material.structural_type = compatible_structural_type
                 # Get classification from results.material if already set
                 # (TopologyNormalizer runs first and may have set dimensionality)
                 existing_dimensionality = material.dimensionality
@@ -90,33 +216,29 @@ class MaterialNormalizer:
                     # Use existing value from topology normalizer
                     pass
                 # Fallback: infer from system type if available
-                elif hasattr(self.repr_system, 'dimensionality'):
-                    material.dimensionality = self.repr_system.dimensionality
+                else:
+                    try:
+                        dimensionality = self.repr_system.dimensionality
+                    except Exception:
+                        dimensionality = None
+                    dim_value = self._dimensionality_to_results_enum(dimensionality)
+                    if dim_value is not None:
+                        material.dimensionality = dim_value
 
                 building_block_map = {
                     Surface: 'surface',
                     Material2D: '2D material',
+                    'surface': 'surface',
+                    '2D': '2D material',
                 }
                 # Attempt to get building block from system type
-                building_block = building_block_map.get(type(self.repr_system))
+                building_block = building_block_map.get(type(self.repr_system)) or (
+                    building_block_map.get(self.structural_type)
+                    if self.structural_type
+                    else None
+                )
                 if building_block:
                     material.building_block = building_block
-
-                # Get particle labels for formula fragments
-                labels = None
-                if (
-                    hasattr(self.repr_system, 'particle_states')
-                    and self.repr_system.particle_states
-                ):
-                    # V2 schema: get labels from particle_states
-                    labels = [
-                        ps.chemical_symbol
-                        for ps in self.repr_system.particle_states
-                        if hasattr(ps, 'chemical_symbol') and ps.chemical_symbol
-                    ]
-                elif hasattr(self.repr_system, 'atoms') and self.repr_system.atoms:
-                    # Fallback to atoms if available
-                    labels = self.repr_system.atoms.get('labels')
 
                 if labels:
                     symbols, reduced_counts = atomutils.get_hill_decomposition(
@@ -132,19 +254,37 @@ class MaterialNormalizer:
         material.symmetry = self.symmetry()
 
         if self.structural_type == 'bulk':
-            material.material_id = material_id_bulk(self.spg_number, self.wyckoff_sets)
+            # Reuse the crystallographic analysis already performed by
+            # nomad-simulations. MatID remains the topology fallback only when
+            # these material-id inputs are absent or inconsistent.
+            v2_symmetry_data = from_model_system(self.repr_system)
+            if self.spg_number is None:
+                self.spg_number = v2_symmetry_data.get('space_group_number')
+            if self.wyckoff_sets is None:
+                self.wyckoff_sets = wyckoff_sets_from_model_system(self.repr_system)
+            if self.spg_number is not None and self.wyckoff_sets is not None:
+                material.material_id = material_id_bulk(
+                    self.spg_number, self.wyckoff_sets
+                )
             material.material_name = self.material_name(symbols, reduced_counts)
             classes = self.material_classification()
             if classes:
                 material.functional_type = classes.get('material_class_springer')
                 material.compound_type = classes.get('compound_class_springer')
         if self.structural_type == '2D':
-            material.material_id = material_id_2d(self.spg_number, self.wyckoff_sets)
+            if self.spg_number is not None and self.wyckoff_sets is not None:
+                material.material_id = material_id_2d(
+                    self.spg_number, self.wyckoff_sets
+                )
         elif self.structural_type == '1D':
-            material.material_id = material_id_1d(self.conv_atoms)
+            if self.conv_atoms is not None:
+                material.material_id = material_id_1d(self.conv_atoms)
+
+        if not populate_topology:
+            return material
 
         # Lazy import to avoid circular dependency
-        from nomad_topology_normalizer.normalizers.topology import TopologyNormalizer
+        from nomad_results_normalizer.normalizers.topology import TopologyNormalizer
 
         topology = TopologyNormalizer(
             self.entry_archive,
@@ -365,20 +505,26 @@ class MaterialNormalizer:
         result = Symmetry()
         filled = False
 
-        if self.repr_symmetry:
-            result.hall_number = self.repr_symmetry.hall_number
-            result.hall_symbol = self.repr_symmetry.hall_symbol
-            result.bravais_lattice = self.repr_symmetry.bravais_lattice
-            result.crystal_system = self.repr_symmetry.crystal_system
-            result.space_group_number = self.repr_symmetry.space_group_number
-            result.space_group_symbol = self.repr_symmetry.international_short_symbol
-            result.point_group = self.repr_symmetry.point_group
+        # Prefer symmetry directly provided by v2 ModelSystem. If core
+        # identifiers are incomplete, fill missing values from legacy
+        # representative symmetry (typically MatID-backed in migrated flows).
+        symmetry_data = from_model_system(self.repr_system)
+        if not is_symmetry_data_minimally_complete(symmetry_data):
+            symmetry_data = self._merge_missing_symmetry_data(
+                symmetry_data, from_legacy_repr_symmetry(self.repr_symmetry)
+            )
+
+        apply_symmetry_data_to_results_symmetry(result, symmetry_data)
+        if any(value is not None for value in symmetry_data.values()):
             filled = True
 
         # Fill in prototype information. SystemNormalizer has cached many of
         # the values during it's own analysis. These cached values are used
         # here.
-        proto = self.repr_system.prototype if self.repr_system else None
+        try:
+            proto = self.repr_system.prototype if self.repr_system else None
+        except Exception:
+            proto = None
         proto = proto[0] if proto else None
         if proto:
             # Prototype id and formula

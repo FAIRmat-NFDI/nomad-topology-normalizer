@@ -1,4 +1,4 @@
-# nomad_topology_normalizer
+# nomad-results-normalizer
 
 Topology Normalizer
 
@@ -8,8 +8,8 @@ This `nomad` plugin was generated with `Cookiecutter` along with `@nomad`'s [`co
 
 If you want to develop locally this plugin, clone the project and in the plugin folder, create a virtual environment (you can use Python 3.10, 3.11 or 3.12):
 ```sh
-git clone https://github.com/FAIRmat-NFDI/nomad_topology_normalizer.git
-cd nomad_topology_normalizer
+git clone https://github.com/FAIRmat-NFDI/nomad-results-normalizer.git
+cd nomad-results-normalizer
 python3.11 -m venv .pyenv
 . .pyenv/bin/activate
 ```

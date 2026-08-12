@@ -12,10 +12,12 @@ Topology Creation Strategy (Waterfall)
 1. **topology_calculation()** - Extract from parser-defined sub_systems
    └─ Uses data.model_system[].sub_systems if available
 
-2. **topology_matid()** - Algorithmic detection using MatID
+2. **topology_v2_symmetry()** - Consume analyzed v2 symmetry/representations
+
+3. **topology_matid()** - Algorithmic fallback using MatID
    └─ Symmetry analysis and clustering for automatic topology detection
 
-3. **topology_data()** - Fallback for SystemV2 entries
+4. **topology_data()** - Fallback for SystemV2 entries
    └─ Direct conversion from SystemV2 structure
 
 Note: Schema version detection and routing logic is in ResultsNormalizer.
@@ -38,6 +40,7 @@ from collections import defaultdict
 
 import numpy as np
 from ase import Atoms
+from ase.data import atomic_numbers as _atomic_numbers
 from ase.data import chemical_symbols as _chemical_symbols
 from matid.clustering import SBC, Cluster
 from matid.symmetry.symmetryanalyzer import SymmetryAnalyzer
@@ -57,11 +60,32 @@ from nomad.datamodel.results import (
     structure_name_map,
 )
 from nomad.datamodel.results import SymmetryNew as Symmetry
+from nomad.units import ureg
 
 # from nomad.normalizing import Normalizer
 from structlog.stdlib import BoundLogger
 
-from nomad_topology_normalizer.normalizers.normalizer import Normalizer
+from nomad_results_normalizer.normalizers.common import (
+    NOMADAtoms,
+    cell_from_ase_atoms,
+    material_id_1d,
+    material_id_2d,
+    material_id_bulk,
+    nomad_atoms_from_ase_atoms,
+    structures_2d,
+    wyckoff_sets_from_matid,
+)
+from nomad_results_normalizer.normalizers.material import MaterialNormalizer
+from nomad_results_normalizer.normalizers.normalizer import Normalizer
+from nomad_results_normalizer.normalizers.symmetry_adapter import (
+    apply_symmetry_data_to_results_symmetry,
+    find_model_system_representation,
+    from_legacy_repr_symmetry,
+    from_model_system,
+    has_complete_model_system_symmetry,
+    is_symmetry_data_minimally_complete,
+    wyckoff_sets_from_model_system,
+)
 
 conventional_description: str = (
     'The conventional cell of the material from which the '
@@ -71,44 +95,6 @@ subsystem_description: str = 'Automatically detected subsystem.'
 chemical_symbols: 'NDArray[np.str_]' = np.array(_chemical_symbols)
 with open(pathlib.Path(__file__).parent / 'data/top_50k_material_ids.json') as fin:
     top_50k_material_ids = json.load(fin)
-
-
-def _lazy_common():
-    from nomad.normalizing import common as _common
-
-    return _common
-
-
-def ase_atoms_from_nomad_atoms(*a, **k):
-    return _lazy_common().ase_atoms_from_nomad_atoms(*a, **k)
-
-
-def cell_from_ase_atoms(*a, **k):
-    return _lazy_common().cell_from_ase_atoms(*a, **k)
-
-
-def material_id_1d(*a, **k):
-    return _lazy_common().material_id_1d(*a, **k)
-
-
-def material_id_2d(*a, **k):
-    return _lazy_common().material_id_2d(*a, **k)
-
-
-def material_id_bulk(*a, **k):
-    return _lazy_common().material_id_bulk(*a, **k)
-
-
-def nomad_atoms_from_ase_atoms(*a, **k):
-    return _lazy_common().nomad_atoms_from_ase_atoms(*a, **k)
-
-
-def structures_2d(*a, **k):
-    return _lazy_common().structures_2d(*a, **k)
-
-
-def wyckoff_sets_from_matid(*a, **k):
-    return _lazy_common().wyckoff_sets_from_matid(*a, **k)
 
 
 def get_topology_id(index: int) -> str:
@@ -206,8 +192,121 @@ def add_system_info_2(  # noqa: PLR0912
             if state.chemical_symbol:
                 symbols.append(state.chemical_symbol)
             elif state.atomic_number:
-                symbols.append(chemical_symbols[state.atomic_number])
+                normalized_number = _normalize_atomic_number(state.atomic_number)
+                if normalized_number is not None:
+                    symbols.append(chemical_symbols[normalized_number])
         return symbols
+
+    def _normalize_atomic_number(number, symbol=None) -> int | None:
+        normalized = None
+        if number is not None:
+            try:
+                normalized = int(number)
+            except Exception:
+                normalized = None
+        if normalized is not None:
+            if normalized >= len(chemical_symbols) or normalized <= 0:
+                reduced = normalized % 100 if normalized > 0 else normalized
+                if 0 < reduced < len(chemical_symbols):
+                    normalized = reduced
+                else:
+                    normalized = None
+        if normalized is None and symbol:
+            normalized = _atomic_numbers.get(symbol)
+        return normalized
+
+    def _populate_chemistry(system: System, symbols: list[str]) -> None:
+        if not symbols:
+            return
+        formula = atomutils.Formula(''.join(symbols))
+        if not system.elements:
+            system.elements = formula.elements()
+        if system.chemical_formula_reduced is None:
+            system.chemical_formula_reduced = formula.format('reduced')
+        if system.chemical_formula_hill is None:
+            system.chemical_formula_hill = formula.format('hill')
+        if system.chemical_formula_iupac is None:
+            system.chemical_formula_iupac = formula.format('iupac')
+        if system.chemical_formula_anonymous is None:
+            system.chemical_formula_anonymous = formula.format('anonymous')
+        if system.chemical_formula_descriptive is None:
+            system.chemical_formula_descriptive = formula.format('descriptive')
+        if not system.elemental_composition:
+            system.elemental_composition = formula.elemental_composition()
+
+    def _nomad_atoms_from_model_system(model_system) -> NOMADAtoms | None:
+        positions = model_system.positions
+        if positions is None:
+            return None
+
+        def _to_meter_array(value) -> np.ndarray | None:
+            if value is None:
+                return None
+            try:
+                if hasattr(value, 'to'):
+                    arr = np.asarray(value.to(ureg.meter).magnitude, dtype=float)
+                else:
+                    arr = np.asarray(value, dtype=float)
+            except Exception:
+                return None
+            if arr.ndim != 2 or arr.shape[1] != 3:
+                return None
+            if not np.isfinite(arr).all():
+                return None
+            # Heuristic: atomistic coordinates/cell vectors should not be in the
+            # micrometer range when expressed in meters. If they are, values are
+            # likely angstrom-like payloads that lost units upstream.
+            if arr.size and np.nanmax(np.abs(arr)) > 1e-5:
+                arr = arr * 1e-10
+            return arr
+
+        pos_arr = _to_meter_array(positions)
+        if pos_arr is None:
+            return None
+
+        particle_states = model_system.particle_states or []
+        labels = []
+        atomic_numbers = []
+        for state in particle_states:
+            symbol = state.chemical_symbol
+            number = state.atomic_number
+            normalized_number = _normalize_atomic_number(number, symbol)
+            if symbol is None and normalized_number is not None:
+                symbol = chemical_symbols[normalized_number]
+            elif symbol is not None and normalized_number is None:
+                normalized_number = _atomic_numbers.get(symbol)
+            if normalized_number is None or normalized_number <= 0:
+                normalized_number = 1
+            labels.append(symbol if symbol is not None else 'X')
+            atomic_numbers.append(int(normalized_number))
+
+        n_positions = len(pos_arr)
+        if len(labels) != n_positions:
+            # Keep array lengths consistent with coordinates.
+            if len(labels) < n_positions:
+                missing = n_positions - len(labels)
+                labels.extend(['X'] * missing)
+                atomic_numbers.extend([1] * missing)
+            else:
+                labels = labels[:n_positions]
+                atomic_numbers = atomic_numbers[:n_positions]
+
+        atoms = NOMADAtoms()
+        atoms.positions = pos_arr * ureg.meter
+        atoms.labels = labels
+        atoms.atomic_numbers = atomic_numbers
+        atoms.species = atomic_numbers
+        lattice_vectors = model_system.lattice_vectors
+        lattice_arr = _to_meter_array(lattice_vectors)
+        if lattice_arr is not None:
+            atoms.lattice_vectors = lattice_arr * ureg.meter
+        pbc = model_system.periodic_boundary_conditions
+        if pbc is not None:
+            pbc_arr = np.asarray(pbc, dtype=bool).reshape(-1)
+            if pbc_arr.size >= 3:
+                atoms.periodic = pbc_arr[:3].tolist()
+
+        return atoms
 
     # Root/original node: derive atoms/cell directly from representative
     # v2 ModelSystem. Keep indices unset because downstream GUI logic uses
@@ -219,25 +318,26 @@ def add_system_info_2(  # noqa: PLR0912
             if system.n_atoms is None and particle_states:
                 system.n_atoms = len(particle_states)
 
-            ase_atoms = parent_system.to_ase_atoms()
+            ase_atoms = None
+            try:
+                ase_atoms = parent_system.to_ase_atoms()
+            except Exception:
+                ase_atoms = None
+
             if ase_atoms is not None:
-                # `results.System.atoms` exists only if runschema support is available.
-                try:
-                    has_atoms_payload = system.atoms is not None
-                except AttributeError:
-                    has_atoms_payload = True
-                if not has_atoms_payload:
-                    system.atoms = nomad_atoms_from_ase_atoms(ase_atoms)
+                # Populate System.atoms for GUI compatibility.
+                # The molecular visualizer still depends on this runschema field.
+                system.atoms = nomad_atoms_from_ase_atoms(ase_atoms)
+
                 if system.cell is None:
                     system.cell = cell_from_ase_atoms(ase_atoms)
+            elif system.atoms is None:
+                # Fallback for inconsistent v2 geometry payloads where
+                # ASE conversion fails.
+                system.atoms = _nomad_atoms_from_model_system(parent_system)
 
             symbols = _particle_symbols(particle_states)
-            if symbols:
-                formula = atomutils.Formula(''.join(symbols))
-                if system.chemical_composition_reduced is None:
-                    system.chemical_composition_reduced = formula.format('reduced')
-                if system.chemical_composition_hill is None:
-                    system.chemical_composition_hill = formula.format('hill')
+            _populate_chemistry(system, symbols)
         except Exception:
             pass
 
@@ -274,10 +374,8 @@ def add_system_info_2(  # noqa: PLR0912
         if not symbols:
             return
 
-        # Calculate chemical formulas
-        formula = atomutils.Formula(''.join(symbols))
-        system.chemical_composition_reduced = formula.format('reduced')
-        system.chemical_composition_hill = formula.format('hill')
+        # Calculate chemistry descriptors from the selected particle symbols.
+        _populate_chemistry(system, symbols)
     except Exception:
         pass
 
@@ -297,55 +395,38 @@ def add_system(
     topologies[system.system_id] = system
 
 
-class _MinimalMaterialNormalizer:
-    """
-    Tiny in-place replacement for MaterialNormalizer with just the fields that
-    TopologyNormalizer.topology(...) cares about.
-
-    - Sets results.material if missing
-    - Fills structural_type from repr_system.type (if available)
-    - Fills dimensionality/building_block from cached classification (if available)
-    """
-
-    def __init__(self, entry_archive, repr_system, repr_symmetry, conv_atoms, logger):
-        self.entry_archive = entry_archive
-        self.repr_system = repr_system
-        self.repr_symmetry = repr_symmetry
-        self.conv_atoms = conv_atoms
-        self.logger = logger
-
-    def material(self) -> Material:
-        # Ensure results.material exists
-        material = self.entry_archive.m_setdefault('results.material')
-
-        # structural_type is what TopologyNormalizer.topology() branches on
-        try:
-            stype = getattr(self.repr_system, 'type', None)
-            if stype:
-                material.structural_type = stype
-        except Exception:
-            pass
-
-        # Optional: Try to preserve existing dimensionality and building_block
-        # from results if already set (e.g., by MaterialNormalizer)
-        # For v2 schema, these should be computed from the data itself
-        try:
-            if hasattr(material, 'dimensionality') and material.dimensionality:
-                pass  # Already set, keep it
-        except Exception:
-            pass
-
-        # We intentionally skip symmetry & material_id, which topology code
-        # does not need
-        return material
-
-
 class TopologyNormalizer(Normalizer):
     """Topology normalizer for material structure analysis.
 
     Inherits from both local Normalizer (for helper methods) and
     nomad.normalizing.Normalizer (for plugin compatibility).
     """
+
+    @staticmethod
+    def _merge_missing_symmetry_data(
+        primary: dict[str, object], fallback: dict[str, object]
+    ) -> dict[str, object]:
+        merged = dict(primary)
+        for key, value in fallback.items():
+            if merged.get(key) is None and value is not None:
+                merged[key] = value
+        return merged
+
+    def _resolved_symmetry_data(self) -> dict[str, object]:
+        symmetry_data = from_model_system(self.repr_system)
+        if not is_symmetry_data_minimally_complete(symmetry_data):
+            symmetry_data = self._merge_missing_symmetry_data(
+                symmetry_data, from_legacy_repr_symmetry(self.repr_symmetry)
+            )
+        return symmetry_data
+
+    @staticmethod
+    def _symmetry_from_data(symmetry_data: dict[str, object]) -> Symmetry | None:
+        if not any(value is not None for value in symmetry_data.values()):
+            return None
+        result = Symmetry()
+        apply_symmetry_data_to_results_symmetry(result, symmetry_data)
+        return result
 
     def _initialize_representative_system(
         self, archive: 'EntryArchive', system_v2=None
@@ -357,6 +438,7 @@ class TopologyNormalizer(Normalizer):
         self.repr_system = None
         self.repr_symmetry = None
         self.conv_atoms = None
+        self._matid_symmetry_analyzer = None
         self.masses = None
 
         # Get representative system from data
@@ -371,9 +453,9 @@ class TopologyNormalizer(Normalizer):
         """Get symmetry and conv_atoms from results if available."""
         try:
             if archive.results and archive.results.properties:
-                structures = getattr(archive.results.properties, 'structures', None)
+                structures = archive.results.properties.structures
                 if structures:
-                    self.repr_symmetry = getattr(structures, 'structure_original', None)
+                    self.repr_symmetry = structures.structure_original
         except Exception:
             pass
 
@@ -393,13 +475,17 @@ class TopologyNormalizer(Normalizer):
         self._initialize_representative_system(archive, system_v2)
 
         if self.entry_archive.results.material is None:
-            self.entry_archive.results.material = _MinimalMaterialNormalizer(
-                self.entry_archive,
-                self.repr_system,
-                self.repr_symmetry,
-                self.conv_atoms,
-                logger,
-            ).material()
+            self.entry_archive.results.material = MaterialNormalizer(
+                entry_archive=self.entry_archive,
+                repr_system=self.repr_system,
+                repr_symmetry=self.repr_symmetry,
+                spg_number=None,  # unknown at this stage in v2 path
+                conv_atoms=self.conv_atoms,
+                wyckoff_sets=None,  # unknown at this stage in v2 path
+                properties=self.entry_archive.results.properties,
+                optimade=None,  # not used in v2 path
+                logger=logger,
+            ).material(populate_topology=False)
 
         if self.entry_archive.results and self.entry_archive.results.material:
             topology = self.topology(self.entry_archive.results.material, system_v2)
@@ -417,12 +503,17 @@ class TopologyNormalizer(Normalizer):
         # First: topology from data schema calculation (v2)
         topology = self.topology_calculation()
 
-        # Second: create topology with MatID
+        # Second: consume symmetry and conventional-cell data already normalized
+        # by nomad-simulations. This avoids repeating MatID symmetry analysis.
+        if topology is None:
+            topology = self.topology_v2_symmetry(material)
+
+        # Third: use MatID only when required v2 inputs are missing/incomplete.
         if topology is None:
             with utils.timer(self.logger, 'calculating topology with matid'):
                 topology = self.topology_matid(material)
 
-        # Third: fallback to topology_data for SystemV2 entries
+        # Fourth: fallback to topology_data for SystemV2 entries
         if topology is None:
             if system_v2 is not None:
                 topology = self.topology_data(system_v2)
@@ -436,27 +527,64 @@ class TopologyNormalizer(Normalizer):
     def topology_calculation(self) -> list[System] | None:
         """Extracts the system topology as defined in the original calculation."""
         system = None
+        model_systems = None
         groups = None
         result = None
 
-        # Extract system from data structure
+        def _has_topology_payload(candidate: SystemV2 | None) -> bool:
+            if not isinstance(candidate, SystemV2):
+                return False
+            try:
+                candidate_groups = candidate.sub_systems
+            except Exception:
+                return False
+            positions = getattr(candidate, 'positions', None)
+            particle_states = getattr(candidate, 'particle_states', None)
+            return bool(
+                candidate_groups
+                and len(candidate_groups) > 0
+                and positions is not None
+                and len(positions) > 0
+                and particle_states
+                and len(particle_states) > 0
+            )
+
         data = self.entry_archive.data
         try:
-            if (
-                data
-                and isinstance(
-                    data,
-                    __import__(
-                        'nomad_simulations.schema_packages.general',
-                        fromlist=['Simulation'],
-                    ).Simulation,
-                )
-                and data.model_system
-                and len(data.model_system) > 0
+            if data and isinstance(
+                data,
+                __import__(
+                    'nomad_simulations.schema_packages.general',
+                    fromlist=['Simulation'],
+                ).Simulation,
             ):
-                system = data.model_system[0]
-        except (AttributeError, IndexError):
-            pass
+                model_systems = data.model_system
+        except Exception:
+            model_systems = None
+
+        # Prefer the already resolved representative system. This keeps
+        # topology/root structure payload aligned with the system selected for
+        # results/material population.
+        if isinstance(self.repr_system, SystemV2):
+            system = self.repr_system
+
+        # If representative system does not carry parser hierarchy payload
+        # (common for trajectory-frame representatives), fallback to a
+        # topology-bearing model_system.
+        if not _has_topology_payload(system) and model_systems:
+            system = next(
+                (
+                    model_system
+                    for model_system in model_systems
+                    if _has_topology_payload(model_system)
+                ),
+                None,
+            )
+
+        # Fallback to first model_system for safety if no topology-bearing
+        # system is available.
+        if system is None and model_systems and len(model_systems) > 0:
+            system = model_systems[0]
 
         # Validate system type and extract groups
         if system and isinstance(system, SystemV2):
@@ -465,21 +593,14 @@ class TopologyNormalizer(Normalizer):
             except Exception:
                 pass
 
+            particle_states = getattr(system, 'particle_states', None)
+
             # Validate system has required data
-            has_valid_data = (
-                groups
-                and len(groups) > 0
-                and system.positions is not None
-                and len(system.positions) > 0
-                and system.particle_states
-                and len(system.particle_states) > 0
-            )
+            has_valid_data = _has_topology_payload(system)
 
             if has_valid_data:
                 topology: dict[str, System] = {}
-                original = get_topology_original(
-                    system.particle_states, self.entry_archive
-                )
+                original = get_topology_original(particle_states, self.entry_archive)
                 add_system(original, topology)
                 label_to_indices: dict[str, list] = defaultdict(list)
 
@@ -568,6 +689,124 @@ class TopologyNormalizer(Normalizer):
 
         return result
 
+    def _conventional_atoms_for_viewer(self) -> Atoms | None:
+        """Conventional-cell geometry for the GUI structure viewer.
+
+        The v2 conventional `Representation` carries `lattice_vectors` but neither
+        positions nor per-site species, so the viewer payload cannot be built from
+        v2 data alone. This recovers geometry only - symmetry and `material_id`
+        still come from the values `nomad-simulations` already normalized and are
+        never recomputed here.
+
+        TODO(migration): drop this once `resolve_analyzed_cell` publishes the
+        conventional cell's fractional coordinates and atomic numbers.
+        """
+        try:
+            atoms = self.repr_system.to_ase_atoms()
+        except Exception:
+            return None
+        if not atoms or len(atoms) == 0:
+            return None
+
+        try:
+            analyzed_system = atoms.copy()
+            analyzed_system.set_pbc(True)
+            conventional_atoms = SymmetryAnalyzer(
+                analyzed_system,
+                config.normalize.symmetry_tolerance,
+                config.normalize.flat_dim_threshold,
+            ).get_conventional_system()
+            conventional_atoms.set_pbc(True)
+            return conventional_atoms
+        except Exception as error:
+            self.logger.warning(
+                'could not build conventional cell geometry for the structure viewer',
+                exc_info=error,
+            )
+            return None
+
+    def topology_v2_symmetry(self, material: Material) -> list[System] | None:
+        """Build bulk topology from existing v2 symmetry and representations."""
+        if getattr(self.repr_system, 'type', None) != 'bulk':
+            return None
+        if not has_complete_model_system_symmetry(self.repr_system):
+            return None
+
+        conventional = find_model_system_representation(
+            self.repr_system, 'conventional'
+        )
+        symmetry_data = from_model_system(self.repr_system)
+        wyckoff_sets = wyckoff_sets_from_model_system(self.repr_system)
+        material_id = material.material_id or material_id_bulk(
+            symmetry_data['space_group_number'], wyckoff_sets
+        )
+        if conventional is None or material_id is None:
+            return None
+
+        try:
+            lattice_vectors = conventional.lattice_vectors.to('angstrom').magnitude
+            conventional_symbols = [
+                wyckoff_set.element
+                for wyckoff_set in wyckoff_sets
+                for _ in wyckoff_set.indices
+            ]
+            # Fallback cell carrier: enough for the Cell adapter to derive lattice
+            # parameters and densities, but it has no meaningful positions.
+            cell_atoms = Atoms(
+                symbols=conventional_symbols,
+                cell=np.asarray(lattice_vectors),
+                pbc=True,
+            )
+        except Exception:
+            return None
+
+        n_conventional_atoms = len(conventional_symbols)
+        viewer_atoms = self._conventional_atoms_for_viewer()
+        if viewer_atoms is not None and len(viewer_atoms) != n_conventional_atoms:
+            self.logger.warning(
+                'conventional cell atom count disagrees with v2 Wyckoff multiplicities',
+                n_wyckoff_atoms=n_conventional_atoms,
+                n_geometry_atoms=len(viewer_atoms),
+            )
+            n_conventional_atoms = len(viewer_atoms)
+
+        topology: dict[str, System] = {}
+        particles = getattr(self.repr_system, 'particle_states', None)
+        original = get_topology_original(particles, self.entry_archive)
+        add_system(original, topology)
+        add_system_info_2(original, topology, parent_system=self.repr_system)
+
+        subsystem = System(
+            method='parser',
+            label='subsystem',
+            dimensionality='3D',
+            structural_type='bulk',
+            description=subsystem_description,
+            system_relation=Relation(type='subsystem'),
+            indices=[list(range(original.n_atoms))],
+        )
+        add_system(subsystem, topology, original)
+        add_system_info_2(subsystem, topology, parent_system=self.repr_system)
+
+        conventional_system = System(
+            method='parser',
+            label='conventional cell',
+            dimensionality='3D',
+            structural_type='bulk',
+            description=conventional_description,
+            system_relation=Relation(type='conventional_cell'),
+            n_atoms=n_conventional_atoms,
+            material_id=material_id,
+            symmetry=self._symmetry_from_data(symmetry_data),
+            cell=cell_from_ase_atoms(viewer_atoms or cell_atoms),
+        )
+        if viewer_atoms is not None:
+            # The molecular visualizer resolves this runschema-typed field.
+            conventional_system.atoms = nomad_atoms_from_ase_atoms(viewer_atoms)
+        add_system(conventional_system, topology, subsystem)
+        material.material_id = material_id
+        return list(topology.values())
+
     def topology_matid(self, material: Material) -> list[SystemV2] | None:  # noqa: PLR0912
         """
         Returns a list of systems that have been identified with MatID.
@@ -582,9 +821,28 @@ class TopologyNormalizer(Normalizer):
         if not atoms or len(atoms) == 0:
             return None
 
+        if material.structural_type == 'bulk' and self.conv_atoms is None:
+            try:
+                symmetry_system = atoms.copy()
+                symmetry_system.set_pbc(True)
+                self._matid_symmetry_analyzer = SymmetryAnalyzer(
+                    symmetry_system,
+                    config.normalize.symmetry_tolerance,
+                    config.normalize.flat_dim_threshold,
+                )
+                self.conv_atoms = (
+                    self._matid_symmetry_analyzer.get_conventional_system()
+                )
+                self.conv_atoms.set_pbc(True)
+            except Exception as error:
+                self.logger.warning(
+                    'could not construct MatID inputs for v2 bulk system',
+                    exc_info=error,
+                )
+
         # Create topology for the original system
         topology: dict[str, System] = {}
-        particles = getattr(self.repr_system, 'particle_states', None)
+        particles = self.repr_system.particle_states
         original = get_topology_original(particles, self.entry_archive)
         # Keep atoms_ref for compatibility with old topology_matid code
         add_system(original, topology)
@@ -598,7 +856,7 @@ class TopologyNormalizer(Normalizer):
         n_atoms = len(atoms)
         cell = atoms.get_cell()
         if material.structural_type == 'bulk':
-            self._topology_bulk(original, topology)
+            self._topology_bulk(original, topology, material)
         elif material.structural_type == '1D':
             self._topology_1d(original, topology)
         # Continue creating topology if system size is not too large
@@ -670,13 +928,13 @@ class TopologyNormalizer(Normalizer):
     def topology_data(self, section: SystemV2, path: str = '') -> list[System]:
         topology: dict[str, System] = {}
         try:
-            particles = getattr(self.repr_system, 'particle_states', None)
+            particles = self.repr_system.particle_states
         except Exception:
             particles = None
         original = get_topology_original(particles, self.entry_archive)
         add_system(original, topology)
         add_system_info_2(original, topology, parent_system=self.repr_system)
-        root_id = path or getattr(section, 'name', None) or section.m_def.name
+        root_id = path or section.name or section.m_def.name
         root = System(
             method='parser',
             label=root_id,
@@ -690,15 +948,16 @@ class TopologyNormalizer(Normalizer):
         add_system_info_2(root, topology, parent_system=self.repr_system)
 
         def recurse(v2sec: SystemV2, parent_sys: System, cur_path: str):
-            for proxy in getattr(v2sec, 'sub_systems', []):
+            for proxy in getattr(v2sec, 'sub_systems', []) or []:
                 sub = getattr(proxy, 'value', proxy)
                 if not isinstance(sub, SubSystemV2):
                     continue
 
-                child_id = f'{cur_path}/{getattr(sub, "name", "")}'
+                child_name = getattr(sub, 'name', None)
+                child_id = f'{cur_path}/{child_name or ""}'
                 child = System(
                     method='parser',
-                    label=getattr(sub, 'name', None) or 'subsystem',
+                    label=child_name or 'subsystem',
                     description='Imported from v2.System',
                 )
 
@@ -713,7 +972,9 @@ class TopologyNormalizer(Normalizer):
 
         return list(topology.values())
 
-    def _topology_bulk(self, original, topology) -> None:
+    def _topology_bulk(
+        self, original, topology, material: Material | None = None
+    ) -> None:
         """Creates a topology for bulk structures as detected by the old matid
         classification."""
         if self.conv_atoms is None:
@@ -741,16 +1002,32 @@ class TopologyNormalizer(Normalizer):
             structural_type='bulk',
             description=conventional_description,
         )
-        conv_system.atoms = nomad_atoms_from_ase_atoms(self.conv_atoms)
-        symmetry_analyzer = self.repr_symmetry.m_cache.get('symmetry_analyzer')
-        conv_system.symmetry = self._create_symmetry(symmetry_analyzer)
+        conv_system.atoms = nomad_atoms_from_ase_atoms(
+            self.conv_atoms
+        )  # GUI visualizer needs this
+        symmetry_analyzer = None
+        m_cache = getattr(self.repr_symmetry, 'm_cache', None)
+        if m_cache is not None and hasattr(m_cache, 'get'):
+            symmetry_analyzer = m_cache.get('symmetry_analyzer')
+        if symmetry_analyzer is None:
+            symmetry_analyzer = self._matid_symmetry_analyzer
+
+        symmetry_data = self._resolved_symmetry_data()
+        conv_system.symmetry = self._symmetry_from_data(symmetry_data)
+        if conv_system.symmetry is None and symmetry_analyzer is not None:
+            conv_system.symmetry = self._create_symmetry(symmetry_analyzer)
         conv_system.cell = cell_from_ase_atoms(
             self.conv_atoms, masses=self.masses, atom_labels=None
         )
-        conv_system.material_id = material_id_bulk(
-            symmetry_analyzer.get_space_group_number(),
-            symmetry_analyzer.get_wyckoff_sets_conventional(),
-        )
+        if material is not None and material.material_id:
+            conv_system.material_id = material.material_id
+        elif symmetry_analyzer is not None:
+            conv_system.material_id = material_id_bulk(
+                symmetry_analyzer.get_space_group_number(),
+                symmetry_analyzer.get_wyckoff_sets_conventional(),
+            )
+            if material is not None:
+                material.material_id = conv_system.material_id
         add_system(conv_system, topology, subsystem)
         add_system_info_2(conv_system, topology, parent_system=self.repr_system)
 
@@ -781,7 +1058,9 @@ class TopologyNormalizer(Normalizer):
             dimensionality='1D',
             structural_type='1D',
         )
-        conv_system.atoms = nomad_atoms_from_ase_atoms(self.conv_atoms)
+        conv_system.atoms = nomad_atoms_from_ase_atoms(
+            self.conv_atoms
+        )  # GUI visualizer needs this
         conv_system.cell = cell_from_ase_atoms(
             self.conv_atoms, masses=self.masses, atom_labels=None
         )
@@ -868,7 +1147,9 @@ class TopologyNormalizer(Normalizer):
         # A big tolerance is used here to allow deviations from exact symmetry
         symm = SymmetryAnalyzer(cell, 1.0)
         conv_system = symm.get_conventional_system()
-        subsystem.atoms = nomad_atoms_from_ase_atoms(conv_system)
+        subsystem.atoms = nomad_atoms_from_ase_atoms(
+            conv_system
+        )  # GUI visualizer needs this
         spg_number = symm.get_space_group_number()
         subsystem.cell = cell_from_ase_atoms(
             conv_system, masses=self.masses, atom_labels=None
@@ -890,7 +1171,9 @@ class TopologyNormalizer(Normalizer):
         subsystem.cell = cell_from_ase_atoms(
             conv_atoms, masses=self.masses, atom_labels=None
         )
-        subsystem.atoms = nomad_atoms_from_ase_atoms(conv_atoms)
+        subsystem.atoms = nomad_atoms_from_ase_atoms(
+            conv_atoms
+        )  # GUI visualizer needs this
 
         # Here we zero out the irrelevant lattice parameters to correctly handle
         # 2D systems with nonzero thickness (e.g. MoS2).
@@ -947,14 +1230,11 @@ class TopologyNormalizer(Normalizer):
         """
         # Validate data structure exists
         data = self.entry_archive.data
-        if not data or not hasattr(data, 'model_system') or not data.model_system:
+        if not data or not data.model_system:
             return []
 
         # Search for first core_hole in model_system hierarchy
         for model_system in data.model_system:
-            if not hasattr(model_system, 'particle_states'):
-                continue
-
             particle_states = model_system.particle_states or []
             for particle_state in particle_states:
                 core_hole = getattr(particle_state, 'core_hole', None)

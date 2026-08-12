@@ -12,8 +12,8 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "License :: OSI Approved :: MIT License",
 ]
-name = "nomad_topology_normalizer"
-description = "Topology Normalizer"
+name = "nomad-results-normalizer"
+description = "Results Normalizer"
 version = "0.1.0"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -25,14 +25,16 @@ maintainers = [
 ]
 license = { file = "LICENSE" }
 dependencies = [
-    "nomad-lab @ git+https://gitlab.mpcdf.mpg.de/nomad-lab/nomad-FAIR.git@migrate-top-norm",
-    "nomad-simulation-parsers @ git+https://github.com/FAIRmat-NFDI/nomad-parser-plugins-simulation.git@81bc154452c21a680b2e1ff7e43d108a22fe3e55",
+    "nomad-lab>=1.3.10",
+    "nomad-simulations>=0.7.0",
+    "nomad-schema-plugin-run>=1.0.5",
+    "nomad-schema-plugin-simulation-workflow>=1.0.11",
     "ase>=3.25.0",
     "python-magic-bin; sys_platform == 'win32'",
 ]
 
 [project.urls]
-Repository = "https://github.com/FAIRmat-NFDI/nomad_topology_normalizer"
+Repository = "https://github.com/FAIRmat-NFDI/nomad-results-normalizer"
 
 [project.optional-dependencies]
 dev = ["ruff", "pytest", "structlog"]
@@ -119,8 +121,8 @@ where = ["src"]
 
 [project.entry-points.'nomad.plugin']
 
-schema_package_entry_point = "nomad_topology_normalizer.schema_packages:schema_package_entry_point"
-results_normalizer_plugin = "nomad_topology_normalizer.normalizers:results_normalizer_plugin"
+schema_package_entry_point = "nomad_results_normalizer.schema_packages:schema_package_entry_point"
+results_normalizer_plugin = "nomad_results_normalizer.normalizers:results_normalizer_plugin"
 
 
 [tool.cruft]

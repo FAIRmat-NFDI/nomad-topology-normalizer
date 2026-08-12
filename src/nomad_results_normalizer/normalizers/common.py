@@ -26,7 +26,12 @@ from matid.symmetry.wyckoffset import (
 )
 from nomad import atomutils
 from nomad.config import config
-from nomad.datamodel.metainfo.system import Atoms as NOMADAtoms
+
+# System.atoms in results topology expects runschema.system.Atoms.
+try:
+    from runschema.system import Atoms as NOMADAtoms
+except Exception:  # pragma: no cover - fallback for environments without runschema
+    from nomad.datamodel.metainfo.system import Atoms as NOMADAtoms
 from nomad.datamodel.optimade import Species
 from nomad.datamodel.results import Cell, LatticeParameters, Structure, WyckoffSet
 from nomad.units import ureg
@@ -212,12 +217,34 @@ def nomad_atoms_from_ase_atoms(system: Atoms) -> NOMADAtoms:
     if system is None:
         return None
 
+    positions_m = np.asarray(
+        (system.get_positions() * ureg.angstrom).to(ureg.meter).magnitude,
+        dtype=float,
+    )
+    lattice_m = np.asarray(
+        (system.get_cell() * ureg.angstrom).to(ureg.meter).magnitude,
+        dtype=float,
+    )
+
+    if (
+        positions_m.size
+        and np.isfinite(positions_m).all()
+        and np.nanmax(np.abs(positions_m)) > 1e-5
+    ):
+        positions_m = positions_m * 1e-10
+    if (
+        lattice_m.size
+        and np.isfinite(lattice_m).all()
+        and np.nanmax(np.abs(lattice_m)) > 1e-5
+    ):
+        lattice_m = lattice_m * 1e-10
+
     atoms = NOMADAtoms()
-    atoms.positions = system.get_positions() * ureg.angstrom
+    atoms.positions = positions_m * ureg.meter
     atoms.labels = system.get_chemical_symbols()
     atoms.atomic_numbers = system.get_atomic_numbers()
     atoms.species = atoms.atomic_numbers
-    atoms.lattice_vectors = system.get_cell() * ureg.angstrom
+    atoms.lattice_vectors = lattice_m * ureg.meter
     atoms.periodic = system.get_pbc()
 
     return atoms
