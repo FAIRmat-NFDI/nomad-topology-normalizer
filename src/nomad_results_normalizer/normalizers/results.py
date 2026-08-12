@@ -17,33 +17,27 @@
 #
 
 """
-Results Normalizer - Entry Point for v2 Data Schema Normalization
-===================================================================
+Results Normalizer - Entry Point for Data-Schema Normalization
+==============================================================
 
 This module provides the main entry point for results normalization with
-backward compatibility support for both v2 data schema and legacy schemas.
+backward compatibility support for both nomad-simulations data-schema and
+legacy schemas.
 
 NORMALIZATION CASCADE ARCHITECTURE
 -----------------------------------
 
 Plugin Entry Point: results_normalizer_plugin (level 3)
     │
-    └─── Schema Detection: _is_v2_data_schema(archive)
+    └─── Schema Detection: _is_data_schema(archive)
             │
             ├─ Checks: archive.data exists?
             │          archive.data.model_system exists?
-            │          Uses basesections.v2.System?
             │
-            ├─ v2 Schema → _normalize_with_data_schema()
+            ├─ Data schema → _normalize_with_data_schema()
             │                 │
             │                 ├─ Initialize results sections
             │                 └─ TopologyNormalizer.normalize()
-            │                       │
-            │                       ├─ MaterialNormalizer (creates material info)
-            │                       └─ topology() waterfall:
-            │                             ├─ topology_calculation() (parser-defined)
-            │                             ├─ topology_matid() (algorithmic)
-            │                             └─ topology_data() (fallback)
             │
             └─ Legacy Schema → _normalize_with_legacy()
                                   │
@@ -57,11 +51,10 @@ Plugin Entry Point: results_normalizer_plugin (level 3)
 Schema Version Detection
 ------------------------
 
-The _is_v2_data_schema() method validates that an entry uses the new v2
-basesections.v2 schema by checking:
+The _is_data_schema() method validates that an entry uses the
+nomad-simulations data-schema path by checking:
 1. archive.data attribute exists
 2. archive.data.model_system attribute exists
-3. model_system contains basesections.v2.System instances
 
 All other cases (including v1 run schema, old data schemas, or empty archives)
 are delegated to the legacy normalizer which handles them appropriately.
@@ -70,9 +63,9 @@ Design Principles
 -----------------
 
 - Single entry point: Avoids double execution and cascade ordering issues
-- Precise detection: Only v2 basesections.v2 triggers new path
-- Automatic fallback: Legacy handles all non-v2 cases without explicit checks
-- Clean separation: v2 code stays in plugin, legacy code stays in nomad-FAIR
+- Precise detection: Only simulation data-schema archives trigger new path
+- Automatic fallback: Legacy handles all non-data-schema cases without explicit checks
+- Clean separation: data-schema code stays in plugin, legacy code stays in nomad-FAIR
 - No breaking changes: Existing entries continue to work via legacy path
 """
 
@@ -154,8 +147,8 @@ try:
 except ImportError:
     runschema = None
 
-from nomad_topology_normalizer.normalizers.common import structures_2d
-from nomad_topology_normalizer.normalizers.method import MethodNormalizer
+from nomad_results_normalizer.normalizers.common import structures_2d
+from nomad_results_normalizer.normalizers.method import MethodNormalizer
 
 # Don't import local Normalizer to avoid circular import
 # ResultsNormalizer inherits directly from nomad.normalizing.Normalizer
@@ -163,7 +156,16 @@ from nomad_topology_normalizer.normalizers.method import MethodNormalizer
 re_label = re.compile('^([a-zA-Z][a-zA-Z]?)[^a-zA-Z]*')
 elements = set(ase.data.chemical_symbols)
 
-V2_COMPATIBILITY_ANNOTATION = 'nomad_topology_normalizer_v2_compatibility'
+DATA_SCHEMA_COMPATIBILITY_ANNOTATION = (
+    'nomad_results_normalizer_data_schema_compatibility'
+)
+_LEGACY_DATA_SCHEMA_COMPATIBILITY_ANNOTATION = (
+    'nomad_topology_normalizer_v2_compatibility'
+)
+_GENERATED_COMPATIBILITY_ANNOTATIONS = {
+    DATA_SCHEMA_COMPATIBILITY_ANNOTATION,
+    _LEGACY_DATA_SCHEMA_COMPATIBILITY_ANNOTATION,
+}
 
 
 def valid_array(array: Any) -> bool:
@@ -200,7 +202,7 @@ def isint(value: Any) -> bool:
 # 3. This ensures nomad.normalizing has finished initializing before we inherit from it
 #
 # See:
-# nomad_topology_normalizer/normalizers/__init__.py::ResultsNormalizerEntryPoint.load()
+# nomad_results_normalizer/normalizers/__init__.py::ResultsNormalizerEntryPoint.load()
 class ResultsNormalizerBase:
     """Results normalizer implementation with schema version detection.
 
@@ -208,7 +210,7 @@ class ResultsNormalizerBase:
     The entry point creates a proper subclass dynamically. See class docstring above.
 
     Strategy:
-    1. Check if archive.data exists (v2 schema) → use new normalization cascade
+    1. Check if archive.data exists (data schema) → use new normalization cascade
     2. If not, fall back to archive.run (v1 schema) → delegate to legacy normalizer
 
     This ensures backward compatibility during the transition period.
@@ -225,14 +227,14 @@ class ResultsNormalizerBase:
         if logger is not None:
             self.logger = logger.bind(normalizer=self.__class__.__name__)
 
-        # ========== LOGICAL SWITCH: v2 basesections vs legacy ==========
-        # Check if v2 data schema with basesections.v2 is present
-        v2_schema_info = self._is_v2_data_schema(archive)
+        # ========== LOGICAL SWITCH: simulation data schema vs legacy ==========
+        # Check if nomad-simulations data schema is present.
+        data_schema_info = self._is_data_schema(archive)
 
-        if v2_schema_info:
-            system_v2 = v2_schema_info if v2_schema_info is not True else None
-            # NEW PATH: Use v2 data schema normalization (this plugin)
-            self.logger.info('Using v2 data schema results normalization')
+        if data_schema_info:
+            system_v2 = data_schema_info if data_schema_info is not True else None
+            # NEW PATH: Use data-schema normalization (this plugin)
+            self.logger.info('Using data-schema results normalization')
             self._normalize_with_data_schema(archive, self.logger, system_v2)
         else:
             # LEGACY PATH: Delegate to legacy normalizer (handles run schema,
@@ -249,30 +251,30 @@ class ResultsNormalizerBase:
         self.entry_archive = None
         self.section_run = None
 
-    def _is_v2_data_schema(self, archive: EntryArchive) -> Any:
-        """Check if archive uses v2 data schema with basesections.v2.
+    def _is_data_schema(self, archive: EntryArchive) -> Any:
+        """Check if archive uses the nomad-simulations data-schema path.
 
-        Returns SystemV2 instance if found, True if indicated by model_system but no
-        instance found, or False.
+        Returns a SystemV2 instance if found, True if indicated by
+        model_system but no instance found, or False.
         """
         if archive.data is None:
             return False
 
-        # Check if data has model_system (Simulation-style v2 schema indicator)
+        # Check if data has model_system (Simulation-style schema indicator).
         try:
             has_model_system = archive.data.model_system is not None
         except Exception:
             has_model_system = False
 
-        # Verify it's using basesections.v2 by checking the class origin
+        # Some data-schema archives still embed a basesections v2 System.
         from nomad.datamodel.metainfo.basesections.v2 import System as SystemV2
 
         for sec in archive.data.m_all_contents(include_self=True):
             if isinstance(sec, SystemV2):
                 return sec
 
-        # If model_system attribute exists but is empty, still consider it v2
-        # schema (e.g. partially parsed Simulation).
+        # If model_system attribute exists but is empty, still consider it a
+        # data-schema archive (e.g. partially parsed Simulation).
         if has_model_system:
             return True
 
@@ -283,8 +285,8 @@ class ResultsNormalizerBase:
     def _normalize_with_data_schema(
         self, archive: EntryArchive, logger, system_v2=None
     ) -> None:
-        """Normalization cascade for v2 data schema (archive.data)."""
-        from nomad_topology_normalizer.normalizers.topology import TopologyNormalizer
+        """Normalization cascade for the nomad-simulations data schema."""
+        from nomad_results_normalizer.normalizers.topology import TopologyNormalizer
 
         # Initialize results sections
         results = self.entry_archive.results
@@ -293,14 +295,14 @@ class ResultsNormalizerBase:
         if results.properties is None:
             results.m_create(Properties)
 
-        # Run topology normalizer for v2 schema
+        # Run topology normalizer for data-schema archives.
         topology_normalizer = TopologyNormalizer()
         topology_normalizer.normalize(archive, logger, system_v2=system_v2)
         self._normalize_method_with_data_schema(archive)
         self._normalize_outputs_with_data_schema(archive)
 
     def _normalize_method_with_data_schema(self, archive: EntryArchive) -> None:
-        """Populate results.method from v2 Simulation data when available."""
+        """Populate results.method from nomad-simulations data when available."""
 
         def _enum_values(section_cls, quantity_name: str) -> set[str]:
             return set(section_cls.m_def.all_quantities[quantity_name].type)
@@ -579,14 +581,14 @@ class ResultsNormalizerBase:
 
         if method_tokens:
             # NOTE(migration): results.method.method_name is currently a single
-            # enum value in nomad-FAIR results schema. For v2 multi-method
+            # enum value in nomad-FAIR results schema. For data-schema multi-method
             # inputs, we intentionally use the first supported model_method as
             # the canonical method_name for backward-compatible search behavior.
             # The full multi-method design is deferred to results/search redesign.
             method.method_name = method_tokens[0]
             if len(method_tokens) > 1:
                 self.logger.warning(
-                    'multiple v2 model_method sections present; using first '
+                    'multiple data-schema model_method sections present; using first '
                     'supported method_name for results compatibility',
                     chosen_method=method_tokens[0],
                     available_methods=method_tokens,
@@ -638,20 +640,25 @@ class ResultsNormalizerBase:
         )
 
     @staticmethod
-    def _mark_compatibility_section(section):
+    def _mark_generated_compatibility_section(section):
         """Mark a generated section without changing user-facing quantities."""
-        section.m_annotations[V2_COMPATIBILITY_ANNOTATION] = {'generated': True}
+        section.m_annotations[DATA_SCHEMA_COMPATIBILITY_ANNOTATION] = {
+            'generated': True
+        }
         return section
 
     @staticmethod
-    def _is_compatibility_section(section) -> bool:
+    def _is_generated_compatibility_section(section) -> bool:
         """Whether this normalizer generated the section on an earlier pass.
 
         The marker is an annotation rather than a quantity, so nothing the
         parser owns is inspected and no user-facing field is claimed.
         """
         try:
-            return V2_COMPATIBILITY_ANNOTATION in section.m_annotations
+            return any(
+                annotation in section.m_annotations
+                for annotation in _GENERATED_COMPATIBILITY_ANNOTATIONS
+            )
         except Exception:
             return False
 
@@ -672,7 +679,7 @@ class ResultsNormalizerBase:
                     [
                         section
                         for section in sections
-                        if not self._is_compatibility_section(section)
+                        if not self._is_generated_compatibility_section(section)
                     ],
                 )
 
@@ -681,7 +688,7 @@ class ResultsNormalizerBase:
             spectroscopic.spectra = [
                 section
                 for section in spectroscopic.spectra or []
-                if not self._is_compatibility_section(section)
+                if not self._is_generated_compatibility_section(section)
             ]
 
         structural = properties.structural
@@ -689,7 +696,7 @@ class ResultsNormalizerBase:
             structural.radius_of_gyration = [
                 section
                 for section in structural.radius_of_gyration or []
-                if not self._is_compatibility_section(section)
+                if not self._is_generated_compatibility_section(section)
             ]
 
         thermodynamic = properties.thermodynamic
@@ -697,11 +704,11 @@ class ResultsNormalizerBase:
             thermodynamic.trajectory = [
                 section
                 for section in thermodynamic.trajectory or []
-                if not self._is_compatibility_section(section)
+                if not self._is_generated_compatibility_section(section)
             ]
 
         geometry_optimization = properties.geometry_optimization
-        if self._is_compatibility_section(geometry_optimization):
+        if self._is_generated_compatibility_section(geometry_optimization):
             properties.geometry_optimization = None
 
     def _ensure_legacy_run_calculation(
@@ -716,14 +723,14 @@ class ResultsNormalizerBase:
             (
                 candidate
                 for candidate in runs
-                if self._is_compatibility_section(candidate)
+                if self._is_generated_compatibility_section(candidate)
             ),
             None,
         )
         if run is None:
             run = runschema.run.Run()
             archive.run.append(run)
-        self._mark_compatibility_section(run)
+        self._mark_generated_compatibility_section(run)
 
         calculations = run.calculation
         if calculations and len(calculations) > 0:
@@ -731,7 +738,7 @@ class ResultsNormalizerBase:
         else:
             calculation = runschema.calculation.Calculation()
             run.calculation.append(calculation)
-        self._mark_compatibility_section(calculation)
+        self._mark_generated_compatibility_section(calculation)
 
         return (
             calculation,
@@ -1125,7 +1132,7 @@ class ResultsNormalizerBase:
             )
 
     def _normalize_outputs_with_data_schema(self, archive: EntryArchive) -> None:
-        """Map v2 Simulation.outputs into results.properties (minimal slice)."""
+        """Map nomad-simulations outputs into results.properties."""
 
         def _is_valid_legacy_dos_entry(entry) -> bool:
             if entry is None:
@@ -1176,10 +1183,10 @@ class ResultsNormalizerBase:
         self._remove_generated_compatibility_results(properties)
         if runschema:
             for compatibility_run in archive.run or []:
-                if not self._is_compatibility_section(compatibility_run):
+                if not self._is_generated_compatibility_section(compatibility_run):
                     continue
                 for compatibility_calculation in compatibility_run.calculation or []:
-                    self._mark_compatibility_section(compatibility_calculation)
+                    self._mark_generated_compatibility_section(compatibility_calculation)
                     compatibility_calculation.dos_electronic = []
                     compatibility_calculation.band_structure_electronic = []
 
@@ -1188,7 +1195,7 @@ class ResultsNormalizerBase:
         # no electronic/spectroscopic payload in outputs.
         geometry_optimization = self.geometry_optimization()
         if geometry_optimization is not None:
-            self._mark_compatibility_section(geometry_optimization)
+            self._mark_generated_compatibility_section(geometry_optimization)
             properties.geometry_optimization = geometry_optimization
 
         try:
@@ -1521,7 +1528,7 @@ class ResultsNormalizerBase:
             if had_dos_input:
                 dos_warning = (
                     'Skipping DOS mapping for results.properties.electronic.'
-                    'dos_electronic: could not build payload from v2 outputs.'
+                    'dos_electronic: could not build payload from data-schema outputs.'
                 )
                 self.logger.warning(dos_warning)
             return
@@ -1617,18 +1624,18 @@ class ResultsNormalizerBase:
                 electronic = properties.m_create(ElectronicProperties)
 
             for band_gap in latest_band_gaps:
-                self._mark_compatibility_section(band_gap)
+                self._mark_generated_compatibility_section(band_gap)
                 electronic.m_add_sub_section(ElectronicProperties.band_gap, band_gap)
             for dos in latest_dos_sections:
-                self._mark_compatibility_section(dos)
+                self._mark_generated_compatibility_section(dos)
                 electronic.m_add_sub_section(ElectronicProperties.dos_electronic, dos)
             for band_structure in latest_band_structures:
-                self._mark_compatibility_section(band_structure)
+                self._mark_generated_compatibility_section(band_structure)
                 electronic.m_add_sub_section(
                     ElectronicProperties.band_structure_electronic, band_structure
                 )
             for greens in latest_greens_functions:
-                self._mark_compatibility_section(greens)
+                self._mark_generated_compatibility_section(greens)
                 electronic.m_add_sub_section(
                     ElectronicProperties.greens_functions_electronic, greens
                 )
@@ -1638,7 +1645,7 @@ class ResultsNormalizerBase:
             if spectroscopic is None:
                 spectroscopic = properties.m_create(SpectroscopicProperties)
             for spectrum in spectra_sections:
-                self._mark_compatibility_section(spectrum)
+                self._mark_generated_compatibility_section(spectrum)
                 spectroscopic.m_add_sub_section(
                     SpectroscopicProperties.spectra, spectrum
                 )
@@ -1648,7 +1655,7 @@ class ResultsNormalizerBase:
             if structural is None:
                 structural = properties.m_create(StructuralProperties)
             for rg in rg_sections:
-                self._mark_compatibility_section(rg)
+                self._mark_generated_compatibility_section(rg)
                 structural.m_add_sub_section(
                     StructuralProperties.radius_of_gyration, rg
                 )
@@ -1658,7 +1665,7 @@ class ResultsNormalizerBase:
             if thermodynamic is None:
                 thermodynamic = properties.m_create(ThermodynamicProperties)
             trajectory = Trajectory()
-            self._mark_compatibility_section(trajectory)
+            self._mark_generated_compatibility_section(trajectory)
             available_properties: list[str] = []
             if temperature_series:
                 trajectory.temperature = TemperatureDynamic(
@@ -1679,7 +1686,7 @@ class ResultsNormalizerBase:
         if had_dos_input and not latest_dos_sections:
             dos_warning = (
                 'Skipping DOS mapping for results.properties.electronic.'
-                'dos_electronic: could not build payload from v2 outputs.'
+                'dos_electronic: could not build payload from data-schema outputs.'
             )
             self.logger.warning(dos_warning)
 
@@ -1773,7 +1780,7 @@ class ResultsNormalizerBase:
             spectroscopic.m_add_sub_section(SpectroscopicProperties.spectra, spectra)
 
     def normalize_run(self, logger=None) -> None:
-        from nomad_topology_normalizer.normalizers.material import MaterialNormalizer
+        from nomad_results_normalizer.normalizers.material import MaterialNormalizer
 
         # Fetch different information resources from which data is gathered
         repr_system = None
@@ -2076,7 +2083,7 @@ class ResultsNormalizerBase:
     ) -> list[DensityCharge]:
         """Fetch charge density data.
 
-        TODO: Implement charge density support for v2 data schema.
+        TODO: Implement charge density support for data-schema archives.
         Charge density is not yet available in nomad-simulations outputs.
         Once nomad-simulations adds DensityCharge property, update this method to:
         1. Check for archive.data.outputs[-1].density_charge or similar
@@ -2101,7 +2108,7 @@ class ResultsNormalizerBase:
         """Returns a section containing the references for the Electric Field Gradient.
         This section is then stored under `archive.results.properties.electronic`.
 
-        TODO: Implement EFG support for v2 data schema.
+        TODO: Implement EFG support for data-schema archives.
         Electric Field Gradient is not yet available in nomad-simulations outputs.
         Once nomad-simulations adds ElectricFieldGradient property, update
         this method to:

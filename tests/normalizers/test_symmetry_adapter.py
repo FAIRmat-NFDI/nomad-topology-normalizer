@@ -3,7 +3,7 @@ from types import SimpleNamespace
 from nomad.datamodel.results import Symmetry, SymmetryNew
 from nomad_simulations.schema_packages.model_system import GlobalCrystalSymmetry
 
-from nomad_topology_normalizer.normalizers.symmetry_adapter import (
+from nomad_results_normalizer.normalizers.symmetry_adapter import (
     apply_symmetry_data_to_results_symmetry,
     find_model_system_representation,
     from_legacy_repr_symmetry,

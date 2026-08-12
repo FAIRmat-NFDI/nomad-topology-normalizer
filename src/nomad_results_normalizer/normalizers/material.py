@@ -27,12 +27,12 @@ from nomad import atomutils
 from nomad.atomutils import Formula
 from nomad.datamodel.results import Material, Symmetry, structure_name_map
 
-from nomad_topology_normalizer.normalizers.common import (
+from nomad_results_normalizer.normalizers.common import (
     material_id_1d,
     material_id_2d,
     material_id_bulk,
 )
-from nomad_topology_normalizer.normalizers.symmetry_adapter import (
+from nomad_results_normalizer.normalizers.symmetry_adapter import (
     apply_symmetry_data_to_results_symmetry,
     from_legacy_repr_symmetry,
     from_model_system,
@@ -283,7 +283,7 @@ class MaterialNormalizer:
             return material
 
         # Lazy import to avoid circular dependency
-        from nomad_topology_normalizer.normalizers.topology import TopologyNormalizer
+        from nomad_results_normalizer.normalizers.topology import TopologyNormalizer
 
         topology = TopologyNormalizer(
             self.entry_archive,

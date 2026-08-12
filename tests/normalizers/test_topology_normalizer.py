@@ -19,8 +19,8 @@ from nomad_simulations.schema_packages.model_system import (
     ModelSystem,
 )
 
-from nomad_topology_normalizer.normalizers.common import material_id_bulk
-from nomad_topology_normalizer.normalizers.topology import (
+from nomad_results_normalizer.normalizers.common import material_id_bulk
+from nomad_results_normalizer.normalizers.topology import (
     TopologyNormalizer,
     add_system,
 )

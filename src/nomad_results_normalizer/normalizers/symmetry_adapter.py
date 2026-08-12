@@ -5,7 +5,7 @@ from typing import Any
 from ase.data import chemical_symbols
 from nomad.datamodel.results import WyckoffSet, bravais_lattices, crystal_systems
 
-# TODO(migration): Keep adapter local to topology-normalizer during v2 migration.
+# TODO(migration): Keep adapter local to results-normalizer during migration.
 # TODO(migration): Re-evaluate elevation only after nomad-simulations/nomad-FAIR
 # symmetry field stability is confirmed and cross-plugin parity fixtures exist.
 

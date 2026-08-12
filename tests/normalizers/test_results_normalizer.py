@@ -73,10 +73,10 @@ from nomad_simulations.schema_packages.workflow.geometry_optimization import (
     GeometryOptimizationResults as SimGeometryOptimizationResults,
 )
 
-from nomad_topology_normalizer.normalizers.results import (
-    V2_COMPATIBILITY_ANNOTATION,
+from nomad_results_normalizer.normalizers.results import (
+    DATA_SCHEMA_COMPATIBILITY_ANNOTATION,
 )
-from nomad_topology_normalizer.normalizers.results import (
+from nomad_results_normalizer.normalizers.results import (
     ResultsNormalizerBase as ResultsNormalizer,
 )
 
@@ -100,10 +100,10 @@ def _kline_path():
 
 @pytest.fixture
 def archive_with_data_schema():
-    """Create an archive with v2 data schema (archive.data)."""
+    """Create an archive with nomad-simulations data schema (archive.data)."""
     archive = EntryArchive(metadata=EntryMetadata())
 
-    # Create v2 data schema
+    # Create nomad-simulations data schema
     simulation = Simulation()
     model_system = ModelSystem(
         name='test_system',
@@ -145,7 +145,7 @@ def archive_with_nested_system():
     class Container(ArchiveSection):
         sub = SubSection(sub_section=ArchiveSection)
 
-    # Create v2 data schema
+    # Create nomad-simulations data schema
     model_system = ModelSystem(
         name='nested_system',
         type='molecule',
@@ -184,7 +184,7 @@ def archive_empty():
 
 
 def test_schema_detection_data_schema(archive_with_data_schema, caplog):
-    """Test that v2 data schema is detected and routed correctly."""
+    """Test that the data schema is detected and routed correctly."""
     normalizer = ResultsNormalizer()
 
     # Clear any previous log records
@@ -196,9 +196,9 @@ def test_schema_detection_data_schema(archive_with_data_schema, caplog):
     # Check that the correct path was taken
     # Look for the info log message
     assert any(
-        'v2 data schema results normalization' in record.message
+        'data-schema results normalization' in record.message
         for record in caplog.records
-    ), 'Should log v2 data schema path'
+    ), 'Should log data-schema path'
 
     # Should NOT see legacy message
     assert not any(
@@ -207,7 +207,7 @@ def test_schema_detection_data_schema(archive_with_data_schema, caplog):
 
 
 def test_schema_detection_no_schema(archive_empty, caplog):
-    """Test behavior when neither v2 data schema nor legacy schema is present."""
+    """Test behavior when neither data schema nor legacy schema is present."""
     normalizer = ResultsNormalizer()
 
     # Clear any previous log records
@@ -227,7 +227,7 @@ def test_schema_detection_no_schema(archive_empty, caplog):
 
 
 def test_non_simulation_data_schema_uses_legacy_path(caplog):
-    """Custom archive.data without model_system should not use v2 sim path."""
+    """Custom archive.data without model_system should not use data-schema path."""
     archive = EntryArchive(metadata=EntryMetadata())
     archive.results = Results()
     archive.results.properties = Properties()
@@ -251,13 +251,13 @@ def test_non_simulation_data_schema_uses_legacy_path(caplog):
         'legacy results normalization' in record.message for record in caplog.records
     ), 'Non-simulation archive.data should use legacy path'
     assert not any(
-        'v2 data schema results normalization' in record.message
+        'data-schema results normalization' in record.message
         for record in caplog.records
-    ), 'Non-simulation archive.data should not use v2 sim path'
+    ), 'Non-simulation archive.data should not use data-schema path'
 
 
 def test_schema_detection_nested_system(archive_with_nested_system, caplog):
-    """Test that nested SystemV2 is detected and causes v2 normalization."""
+    """Test that nested SystemV2 is detected and causes data-schema normalization."""
     normalizer = ResultsNormalizer()
     caplog.clear()
 
@@ -265,9 +265,9 @@ def test_schema_detection_nested_system(archive_with_nested_system, caplog):
     normalizer.normalize(archive_with_nested_system, LOGGER)
 
     assert any(
-        'v2 data schema results normalization' in record.message
+        'data-schema results normalization' in record.message
         for record in caplog.records
-    ), 'Nested SystemV2 should trigger v2 normalization'
+    ), 'Nested SystemV2 should trigger data-schema normalization'
     # Keep this suite focused on routing. Detailed topology behavior is covered
     # in test_topology_normalizer.py.
     assert archive_with_nested_system.results is not None
@@ -275,7 +275,7 @@ def test_schema_detection_nested_system(archive_with_nested_system, caplog):
 
 
 def test_data_schema_initializes_results_sections(archive_with_data_schema):
-    """v2 data schema path should initialize key results sections."""
+    """Data-schema path should initialize key results sections."""
     normalizer = ResultsNormalizer()
 
     # Run normalization
@@ -287,7 +287,7 @@ def test_data_schema_initializes_results_sections(archive_with_data_schema):
 
 
 def test_data_schema_populates_method_from_simulation():
-    """v2 Simulation program/model_method should populate results.method."""
+    """Simulation program/model_method should populate results.method."""
     archive = EntryArchive(metadata=EntryMetadata())
     archive.results = Results()
     archive.results.properties = Properties()
@@ -374,7 +374,7 @@ def test_data_schema_skips_unsupported_method_names():
 
 
 def test_data_schema_maps_method_details_for_gw_bse_dmft():
-    """v2 method details should map to legacy-equivalent results fields."""
+    """Data-schema method details should map to legacy-equivalent results fields."""
     archive = EntryArchive(metadata=EntryMetadata())
     archive.results = Results()
     archive.results.properties = Properties()
@@ -471,7 +471,7 @@ def test_data_schema_method_name_uses_first_supported_model_method():
 
 
 def test_data_schema_maps_dft_spin_and_jacobs_ladder():
-    """v2 DFT metadata should map to legacy-equivalent DFT result fields."""
+    """Data-schema DFT metadata should map to legacy-equivalent DFT result fields."""
     archive = EntryArchive(metadata=EntryMetadata())
     archive.results = Results()
     archive.results.properties = Properties()
@@ -525,7 +525,7 @@ def test_data_schema_maps_flexible_unit_scf_threshold(archive_with_data_schema):
 
 
 def test_data_schema_maps_outputs_electronic_properties():
-    """v2 outputs should map electronic properties into results."""
+    """Data-schema outputs should map electronic properties into results."""
     archive = EntryArchive(metadata=EntryMetadata())
     archive.results = Results()
     archive.results.properties = Properties()
@@ -746,7 +746,7 @@ def test_data_schema_prefers_representative_system_outputs_for_electronic_proper
 
 
 def test_data_schema_band_structure_mapping_creates_valid_segment_refs():
-    """Band structure mapping from v2 outputs should create non-orphan segment refs."""
+    """Band mapping from data-schema outputs should create non-orphan segment refs."""
     archive = EntryArchive(metadata=EntryMetadata())
     archive.results = Results()
     archive.results.properties = Properties()
@@ -1013,7 +1013,7 @@ def test_data_schema_propagates_reference_energy_to_legacy_electronic_sections()
 
 
 def test_data_schema_populates_deprecated_dos_mapping():
-    """v2 DOS mapping writes deprecated dos_electronic compatibility mirror."""
+    """Data-schema DOS mapping writes deprecated dos_electronic compatibility mirror."""
     archive = EntryArchive(metadata=EntryMetadata())
     archive.results = Results()
     archive.results.properties = Properties()
@@ -1134,7 +1134,7 @@ def test_data_schema_populates_deprecated_dos_with_references():
 
 
 def test_data_schema_replaces_malformed_existing_dos_entries():
-    """v2 DOS mapping should replace stale malformed DOS references in results."""
+    """Data-schema DOS mapping should replace stale malformed DOS references."""
     archive = EntryArchive(metadata=EntryMetadata())
     archive.results = Results()
     archive.results.properties = Properties()
@@ -1320,7 +1320,7 @@ def test_data_schema_keeps_each_method_on_the_representative_system(
 ):
     """DFT and GW results on one system are legacy-equivalent side-by-side data.
 
-    Legacy `get_gw_workflow_properties` publishes both, labelled; the v2 path
+    Legacy `get_gw_workflow_properties` publishes both, labelled; this path
     must not collapse them onto whichever output happens to come last.
     """
     simulation = archive_with_data_schema.data
@@ -1478,7 +1478,7 @@ def test_data_schema_preserves_legacy_calculation_and_result_sections():
     # The generated run is identified by annotation alone; no user-facing
     # quantity is claimed to mark it.
     assert archive.run[1].raw_id is None
-    assert V2_COMPATIBILITY_ANNOTATION in archive.run[1].m_annotations
+    assert DATA_SCHEMA_COMPATIBILITY_ANNOTATION in archive.run[1].m_annotations
     assert any(section.label == 'parser-owned' for section in electronic.dos_electronic)
     assert any(
         section.label == 'parser-owned'
@@ -1492,7 +1492,7 @@ def test_data_schema_preserves_legacy_calculation_and_result_sections():
         for section in serialized['results']['properties']['electronic'][
             'dos_electronic'
         ]
-        if V2_COMPATIBILITY_ANNOTATION in section.get('m_annotations', {})
+        if DATA_SCHEMA_COMPATIBILITY_ANNOTATION in section.get('m_annotations', {})
     )
     assert generated_dos.get('label') is None
     assert generated_dos['energies'].startswith('/run/1/calculation/0/')
@@ -1522,13 +1522,13 @@ def test_data_schema_output_mapping_is_idempotent(archive_with_data_schema):
     )
     first_time = properties.thermodynamic.trajectory[0].temperature.time.copy()
 
-    assert V2_COMPATIBILITY_ANNOTATION in (
+    assert DATA_SCHEMA_COMPATIBILITY_ANNOTATION in (
         properties.spectroscopic.spectra[0].m_annotations
     )
-    assert V2_COMPATIBILITY_ANNOTATION in (
+    assert DATA_SCHEMA_COMPATIBILITY_ANNOTATION in (
         properties.structural.radius_of_gyration[0].m_annotations
     )
-    assert V2_COMPATIBILITY_ANNOTATION in (
+    assert DATA_SCHEMA_COMPATIBILITY_ANNOTATION in (
         properties.thermodynamic.trajectory[0].m_annotations
     )
     assert properties.thermodynamic.trajectory[0].provenance is None
@@ -1650,7 +1650,7 @@ def test_data_schema_skips_dos_cleanly_without_runschema(
 
 
 def test_data_schema_priority_over_run(archive_with_data_schema):
-    """Test that v2 data schema takes priority when both schemas present."""
+    """Test that data schema takes priority when both schemas present."""
     # Add a mock run section to the data schema archive
     from nomad.datamodel.data import ArchiveSection
 
@@ -1832,7 +1832,7 @@ def test_normalize_with_data_schema_calls_topology_normalizer(
     archive_with_data_schema, monkeypatch
 ):
     """Test that _normalize_with_data_schema calls TopologyNormalizer."""
-    from nomad_topology_normalizer.normalizers.topology import TopologyNormalizer
+    from nomad_results_normalizer.normalizers.topology import TopologyNormalizer
 
     # Track if TopologyNormalizer.normalize was called
     normalize_called = []

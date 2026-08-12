@@ -65,7 +65,7 @@ from nomad.units import ureg
 # from nomad.normalizing import Normalizer
 from structlog.stdlib import BoundLogger
 
-from nomad_topology_normalizer.normalizers.common import (
+from nomad_results_normalizer.normalizers.common import (
     NOMADAtoms,
     cell_from_ase_atoms,
     material_id_1d,
@@ -75,9 +75,9 @@ from nomad_topology_normalizer.normalizers.common import (
     structures_2d,
     wyckoff_sets_from_matid,
 )
-from nomad_topology_normalizer.normalizers.material import MaterialNormalizer
-from nomad_topology_normalizer.normalizers.normalizer import Normalizer
-from nomad_topology_normalizer.normalizers.symmetry_adapter import (
+from nomad_results_normalizer.normalizers.material import MaterialNormalizer
+from nomad_results_normalizer.normalizers.normalizer import Normalizer
+from nomad_results_normalizer.normalizers.symmetry_adapter import (
     apply_symmetry_data_to_results_symmetry,
     find_model_system_representation,
     from_legacy_repr_symmetry,

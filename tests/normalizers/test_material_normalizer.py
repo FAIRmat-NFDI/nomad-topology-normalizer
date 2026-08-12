@@ -12,7 +12,7 @@ from nomad_simulations.schema_packages.atoms_state import AtomsState
 from nomad_simulations.schema_packages.general import Simulation
 from nomad_simulations.schema_packages.model_system import ModelSystem
 
-from nomad_topology_normalizer.normalizers.material import MaterialNormalizer
+from nomad_results_normalizer.normalizers.material import MaterialNormalizer
 
 LOGGER = get_logger(__name__)
 

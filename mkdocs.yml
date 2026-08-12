@@ -1,8 +1,8 @@
-site_name: nomad_topology_normalizer
+site_name: nomad-results-normalizer
 site_description: Topology Normalizer
 site_author: Amir Golparvar
 
-repo_url: https://github.com/FAIRmat-NFDI/nomad_topology_normalizer
+repo_url: https://github.com/FAIRmat-NFDI/nomad-results-normalizer
 edit_uri: ""
 
 nav:

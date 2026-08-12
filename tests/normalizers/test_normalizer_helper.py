@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 from unittest.mock import Mock
 
-from nomad_topology_normalizer.normalizers.normalizer import Normalizer
+from nomad_results_normalizer.normalizers.normalizer import Normalizer
 
 
 def _make_normalizer() -> Normalizer:
