@@ -1,11 +1,20 @@
-import os.path
+from pathlib import Path
 
-from nomad.client import normalize_all, parse
+import yaml
+from nomad.client import normalize_all
+from nomad.datamodel import EntryArchive, EntryMetadata
+
+
+def _load_archive(test_file: str) -> EntryArchive:
+    archive_path = Path('tests') / 'data' / test_file
+    with archive_path.open() as f:
+        archive = EntryArchive().m_from_dict(yaml.safe_load(f))
+    archive.metadata = EntryMetadata(entry_name=test_file)
+    return archive
 
 
 def test_schema_package():
-    test_file = os.path.join('tests', 'data', 'test.archive.yaml')
-    entry_archive = parse(test_file)[0]
+    entry_archive = _load_archive('test.archive.yaml')
     normalize_all(entry_archive)
 
     assert entry_archive.data.message == 'Hello Markus!'
@@ -13,8 +22,7 @@ def test_schema_package():
 
 def test_second_archive_populates_results_material_topology():
     """Direct v2 System fixture should populate topology with mapped fractions."""
-    test_file = os.path.join('tests', 'data', 'second.archive.yaml')
-    entry_archive = parse(test_file)[0]
+    entry_archive = _load_archive('second.archive.yaml')
     normalize_all(entry_archive)
 
     topology = entry_archive.results.material.topology

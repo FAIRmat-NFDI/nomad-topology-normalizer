@@ -476,15 +476,15 @@ class TopologyNormalizer(Normalizer):
 
         if self.entry_archive.results.material is None:
             self.entry_archive.results.material = MaterialNormalizer(
-                self.entry_archive,
-                self.repr_system,
-                self.repr_symmetry,
-                None,  # spg_number unknown at this stage in v2 path
-                self.conv_atoms,
-                None,  # wyckoff_sets unknown at this stage in v2 path
-                self.entry_archive.results.properties,
-                None,  # optimade not used in v2 path
-                logger,
+                entry_archive=self.entry_archive,
+                repr_system=self.repr_system,
+                repr_symmetry=self.repr_symmetry,
+                spg_number=None,  # unknown at this stage in v2 path
+                conv_atoms=self.conv_atoms,
+                wyckoff_sets=None,  # unknown at this stage in v2 path
+                properties=self.entry_archive.results.properties,
+                optimade=None,  # not used in v2 path
+                logger=logger,
             ).material(populate_topology=False)
 
         if self.entry_archive.results and self.entry_archive.results.material:

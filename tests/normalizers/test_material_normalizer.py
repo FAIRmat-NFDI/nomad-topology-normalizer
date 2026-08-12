@@ -131,15 +131,15 @@ class TestMaterialNormalizer:
         archive.data = Simulation(model_system=[system])
 
         material = MaterialNormalizer(
-            archive,
-            system,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            LOGGER,
+            entry_archive=archive,
+            repr_system=system,
+            repr_symmetry=None,
+            spg_number=None,
+            conv_atoms=None,
+            wyckoff_sets=None,
+            properties=None,
+            optimade=None,
+            logger=LOGGER,
         ).material(populate_topology=False)
 
         assert material.structural_type == 'molecule / cluster'
@@ -277,7 +277,15 @@ class TestMaterialNormalizer:
             point_group='m-3m',
         )
         normalizer = MaterialNormalizer(
-            archive, repr_system, repr_symmetry, None, None, None, None, None, LOGGER
+            entry_archive=archive,
+            repr_system=repr_system,
+            repr_symmetry=repr_symmetry,
+            spg_number=None,
+            conv_atoms=None,
+            wyckoff_sets=None,
+            properties=None,
+            optimade=None,
+            logger=LOGGER,
         )
 
         symmetry = normalizer.symmetry()
@@ -312,7 +320,15 @@ class TestMaterialNormalizer:
             point_group='m-3m',
         )
         normalizer = MaterialNormalizer(
-            archive, repr_system, repr_symmetry, None, None, None, None, None, LOGGER
+            entry_archive=archive,
+            repr_system=repr_system,
+            repr_symmetry=repr_symmetry,
+            spg_number=None,
+            conv_atoms=None,
+            wyckoff_sets=None,
+            properties=None,
+            optimade=None,
+            logger=LOGGER,
         )
 
         symmetry = normalizer.symmetry()

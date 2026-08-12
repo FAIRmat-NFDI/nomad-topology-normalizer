@@ -516,6 +516,7 @@ class ElectronicMethod(ABC):
     def __init__(
         self,
         logger,
+        *,
         entry_archive: EntryArchive | None = None,
         methods: list[ArchiveSection] = [None],
         repr_method: ArchiveSection | None = None,

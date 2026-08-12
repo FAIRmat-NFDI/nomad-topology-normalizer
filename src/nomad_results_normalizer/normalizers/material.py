@@ -44,6 +44,7 @@ from nomad_results_normalizer.normalizers.symmetry_adapter import (
 class MaterialNormalizer:
     def __init__(
         self,
+        *,
         entry_archive,
         repr_system,
         repr_symmetry,

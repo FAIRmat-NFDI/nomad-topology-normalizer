@@ -1804,15 +1804,15 @@ class ResultsNormalizerBase:
         )
         results.properties = properties
         results.material = MaterialNormalizer(
-            self.entry_archive,
-            repr_system,
-            repr_symmetry,
-            spg_number,
-            conv_atoms,
-            wyckoff_sets,
-            properties,
-            optimade,
-            logger,
+            entry_archive=self.entry_archive,
+            repr_system=repr_system,
+            repr_symmetry=repr_symmetry,
+            spg_number=spg_number,
+            conv_atoms=conv_atoms,
+            wyckoff_sets=wyckoff_sets,
+            properties=properties,
+            optimade=optimade,
+            logger=logger,
         ).material()
 
         results.method = MethodNormalizer(
