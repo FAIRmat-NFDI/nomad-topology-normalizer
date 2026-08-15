@@ -1661,14 +1661,20 @@ def test_data_schema_runs_after_legacy_run(archive_with_data_schema):
 def test_data_schema_runs_plugin_path(archive_with_data_schema, monkeypatch):
     calls = []
 
-    def data_schema(self, archive, logger, system_v2=None):
-        calls.append('data-schema')
+    def method(self, archive):
+        calls.append('method')
 
-    monkeypatch.setattr(ResultsNormalizer, '_normalize_with_data_schema', data_schema)
+    def outputs(self, archive):
+        calls.append('outputs')
+
+    monkeypatch.setattr(ResultsNormalizer, '_normalize_method_with_data_schema', method)
+    monkeypatch.setattr(
+        ResultsNormalizer, '_normalize_outputs_with_data_schema', outputs
+    )
 
     ResultsNormalizer().normalize(archive_with_data_schema, LOGGER)
 
-    assert calls == ['data-schema']
+    assert calls == ['method', 'outputs']
 
 
 def test_data_schema_maps_geometry_optimization_workflow(archive_with_data_schema):
@@ -1831,10 +1837,10 @@ def test_data_schema_merges_electronic_payload_split_across_outputs(
         assert electronic.dos_electronic
 
 
-def test_normalize_with_data_schema_calls_topology_normalizer(
+def test_data_schema_normalize_calls_topology_normalizer(
     archive_with_data_schema, monkeypatch
 ):
-    """Test that _normalize_with_data_schema calls TopologyNormalizer."""
+    """Test that the data-schema normalize path calls TopologyNormalizer."""
     from nomad_results_normalizer.normalizers.topology import TopologyNormalizer
 
     # Track if TopologyNormalizer.normalize was called

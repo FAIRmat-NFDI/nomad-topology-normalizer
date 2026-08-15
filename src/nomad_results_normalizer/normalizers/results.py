@@ -32,7 +32,7 @@ Plugin Entry Point: results_normalizer_plugin (level 3)
     │
     └─── When data-schema is available:
             │
-            └─ Data schema → _normalize_with_data_schema()
+            └─ Data-schema normalization
                               │
                               ├─ Initialize results sections
                               └─ TopologyNormalizer.normalize()
@@ -217,9 +217,21 @@ class ResultsNormalizerBase:
         data_schema_info = self._is_data_schema(archive)
 
         if data_schema_info:
+            from nomad_results_normalizer.normalizers.topology import TopologyNormalizer
+
             system_v2 = data_schema_info if data_schema_info is not True else None
             self.logger.info('Running data-schema results normalization')
-            self._normalize_with_data_schema(archive, self.logger, system_v2)
+
+            results = self.entry_archive.results
+            if results is None:
+                results = self.entry_archive.m_create(Results)
+            if results.properties is None:
+                results.m_create(Properties)
+
+            topology_normalizer = TopologyNormalizer()
+            topology_normalizer.normalize(archive, self.logger, system_v2=system_v2)
+            self._normalize_method_with_data_schema(archive)
+            self._normalize_outputs_with_data_schema(archive)
         else:
             self.logger.info('Skipping data-schema results normalization')
 
@@ -256,25 +268,6 @@ class ResultsNormalizerBase:
         # Non-simulation custom data sections (and any other data without
         # model_system) are not handled by this plugin.
         return False
-
-    def _normalize_with_data_schema(
-        self, archive: EntryArchive, logger, system_v2=None
-    ) -> None:
-        """Normalization cascade for the nomad-simulations data schema."""
-        from nomad_results_normalizer.normalizers.topology import TopologyNormalizer
-
-        # Initialize results sections
-        results = self.entry_archive.results
-        if results is None:
-            results = self.entry_archive.m_create(Results)
-        if results.properties is None:
-            results.m_create(Properties)
-
-        # Run topology normalizer for data-schema archives.
-        topology_normalizer = TopologyNormalizer()
-        topology_normalizer.normalize(archive, logger, system_v2=system_v2)
-        self._normalize_method_with_data_schema(archive)
-        self._normalize_outputs_with_data_schema(archive)
 
     def _normalize_method_with_data_schema(self, archive: EntryArchive) -> None:
         """Populate results.method from nomad-simulations data when available."""
