@@ -20,9 +20,8 @@
 Results Normalizer - Entry Point for Data-Schema Normalization
 ==============================================================
 
-This module provides the main entry point for results normalization with
-backward compatibility support for both nomad-simulations data-schema and
-legacy schemas.
+This module provides the main entry point for nomad-simulations data-schema
+results normalization.
 
 NORMALIZATION CASCADE ARCHITECTURE
 -----------------------------------
@@ -31,14 +30,7 @@ Plugin Entry Point: results_normalizer_plugin (level 3)
     │
     ├─── Detect data-schema availability: _is_data_schema(archive)
     │
-    ├─── Always attempt: _normalize_with_legacy()
-    │             │
-    │             └─ Delegates to
-    │                nomad.normalizing.results.ResultsNormalizer
-    │                   │
-    │                   └─ Handles: v1 run schema and existing NOMAD behavior
-    │
-    └─── Then, when data-schema is available:
+    └─── When data-schema is available:
             │
             └─ Data schema → _normalize_with_data_schema()
                               │
@@ -53,15 +45,14 @@ nomad-simulations data-schema path by checking:
 1. archive.data attribute exists
 2. archive.data.model_system attribute exists
 
-All archives run legacy normalization. Entries with nomad-simulations data run
-the plugin's data-schema normalization afterward.
+Entries with nomad-simulations data run the plugin's data-schema
+normalization. Other archives are left to the built-in NOMAD normalizers.
 
 Design Principles
 -----------------
 
-- Single entry point: Keeps legacy and data-schema result population ordered
+- Single entry point: Adds data-schema result population after built-in normalizers
 - Precise detection: Only simulation data-schema archives trigger the plugin pass
-- Backward compatibility: Legacy normalization still runs for all archives
 - Clean separation: data-schema code stays in plugin, legacy code stays in nomad-FAIR
 - No breaking changes: Existing entries continue to receive legacy results
 """
@@ -207,11 +198,9 @@ class ResultsNormalizerBase:
     The entry point creates a proper subclass dynamically. See class docstring above.
 
     Strategy:
-    1. Always run the legacy NOMAD FAIR ResultsNormalizer first.
-    2. If nomad-simulations data is present, run the data-schema cascade after
-       legacy normalization to add/override data-schema-derived results.
-
-    This ensures backward compatibility during the transition period.
+    If nomad-simulations data is present, run the data-schema cascade to
+    add/override data-schema-derived results. Archives without data-schema
+    content are handled by NOMAD's built-in normalizers.
     """
 
     domain = None
@@ -224,21 +213,8 @@ class ResultsNormalizerBase:
         if logger is not None:
             self.logger = logger.bind(normalizer=self.__class__.__name__)
 
-        # ========== LOGICAL SWITCH: legacy baseline plus data-schema pass ==========
-        # Check first so a legacy failure does not prevent data-schema fallback.
+        # ========== LOGICAL SWITCH: data-schema pass ==========
         data_schema_info = self._is_data_schema(archive)
-
-        self.logger.info('Running legacy results normalization')
-        try:
-            self._normalize_with_legacy(archive, self.logger)
-        except Exception as error:
-            if not data_schema_info:
-                raise
-            self.logger.warning(
-                'Legacy results normalization failed before data-schema pass; '
-                'continuing with data-schema results normalization.',
-                exc_info=error,
-            )
 
         if data_schema_info:
             system_v2 = data_schema_info if data_schema_info is not True else None
@@ -278,7 +254,7 @@ class ResultsNormalizerBase:
             return True
 
         # Non-simulation custom data sections (and any other data without
-        # model_system) must go through the legacy fallback path.
+        # model_system) are not handled by this plugin.
         return False
 
     def _normalize_with_data_schema(
@@ -1704,20 +1680,6 @@ class ResultsNormalizerBase:
             self.logger.warning(dos_warning)
 
         self._log_unmapped_output_groups(outputs)
-
-    def _normalize_with_legacy(self, archive: EntryArchive, logger) -> None:
-        """Run the legacy NOMAD FAIR ResultsNormalizer baseline.
-
-        This runs before the plugin data-schema pass so existing run-schema
-        behavior remains available when parsers populate both archive.run and
-        archive.data.
-        """
-        from nomad.normalizing.results import (
-            ResultsNormalizer as LegacyResultsNormalizer,
-        )
-
-        legacy_normalizer = LegacyResultsNormalizer()
-        legacy_normalizer.normalize(archive, logger)
 
     def normalize_sample(self, sample) -> None:
         material = self.entry_archive.m_setdefault('results.material')

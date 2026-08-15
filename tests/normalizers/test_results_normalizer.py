@@ -184,7 +184,7 @@ def archive_empty():
 
 
 def test_schema_detection_data_schema(archive_with_data_schema, caplog):
-    """Data-schema archives should run legacy first, then the plugin path."""
+    """Data-schema archives should run the plugin path."""
     normalizer = ResultsNormalizer()
 
     # Clear any previous log records
@@ -197,13 +197,13 @@ def test_schema_detection_data_schema(archive_with_data_schema, caplog):
         'data-schema results normalization' in record.message
         for record in caplog.records
     ), 'Should log data-schema path'
-    assert any(
+    assert not any(
         'legacy results normalization' in record.message for record in caplog.records
-    ), 'Should log legacy path before data-schema path'
+    ), 'Plugin should not run legacy results normalization itself'
 
 
 def test_schema_detection_no_schema(archive_empty, caplog):
-    """Archives without data-schema content should only run legacy."""
+    """Archives without data-schema content should be skipped by this plugin."""
     normalizer = ResultsNormalizer()
 
     # Clear any previous log records
@@ -217,15 +217,12 @@ def test_schema_detection_no_schema(archive_empty, caplog):
         pass
 
     assert any(
-        'legacy results normalization' in record.message for record in caplog.records
-    ), 'Should log legacy path'
-    assert any(
         'Skipping data-schema results normalization' in record.message
         for record in caplog.records
     ), 'Should skip data-schema path when no nomad-simulations data exists'
 
 
-def test_non_simulation_data_schema_uses_legacy_path(caplog):
+def test_non_simulation_data_schema_skips_plugin_path(caplog):
     """Custom archive.data without model_system should not use data-schema path."""
     archive = EntryArchive(metadata=EntryMetadata())
     archive.results = Results()
@@ -239,16 +236,12 @@ def test_non_simulation_data_schema_uses_legacy_path(caplog):
     normalizer = ResultsNormalizer()
     caplog.clear()
 
-    try:
-        normalizer.normalize(archive, LOGGER)
-    except Exception:
-        # Legacy path may still fail depending on environment; routing is
-        # tested via logs.
-        pass
+    normalizer.normalize(archive, LOGGER)
 
     assert any(
-        'legacy results normalization' in record.message for record in caplog.records
-    ), 'Non-simulation archive.data should use legacy path'
+        'Skipping data-schema results normalization' in record.message
+        for record in caplog.records
+    ), 'Non-simulation archive.data should be skipped by this plugin'
     assert not any(
         record.message == 'Running data-schema results normalization'
         for record in caplog.records
@@ -1665,47 +1658,17 @@ def test_data_schema_runs_after_legacy_run(archive_with_data_schema):
     assert archive_with_data_schema.results is not None
 
 
-def test_data_schema_runs_legacy_before_plugin(archive_with_data_schema, monkeypatch):
+def test_data_schema_runs_plugin_path(archive_with_data_schema, monkeypatch):
     calls = []
-
-    def legacy(self, archive, logger):
-        calls.append('legacy')
 
     def data_schema(self, archive, logger, system_v2=None):
         calls.append('data-schema')
 
-    monkeypatch.setattr(ResultsNormalizer, '_normalize_with_legacy', legacy)
     monkeypatch.setattr(ResultsNormalizer, '_normalize_with_data_schema', data_schema)
 
     ResultsNormalizer().normalize(archive_with_data_schema, LOGGER)
 
-    assert calls == ['legacy', 'data-schema']
-
-
-def test_data_schema_runs_plugin_after_legacy_failure(
-    archive_with_data_schema, monkeypatch, caplog
-):
-    calls = []
-
-    def legacy(self, archive, logger):
-        calls.append('legacy')
-        raise RuntimeError('legacy fixture failure')
-
-    def data_schema(self, archive, logger, system_v2=None):
-        calls.append('data-schema')
-
-    monkeypatch.setattr(ResultsNormalizer, '_normalize_with_legacy', legacy)
-    monkeypatch.setattr(ResultsNormalizer, '_normalize_with_data_schema', data_schema)
-    caplog.clear()
-
-    ResultsNormalizer().normalize(archive_with_data_schema, LOGGER)
-
-    assert calls == ['legacy', 'data-schema']
-    assert any(
-        'Legacy results normalization failed before data-schema pass'
-        in record.message
-        for record in caplog.records
-    )
+    assert calls == ['data-schema']
 
 
 def test_data_schema_maps_geometry_optimization_workflow(archive_with_data_schema):
@@ -1891,31 +1854,6 @@ def test_normalize_with_data_schema_calls_topology_normalizer(
 
     # Verify TopologyNormalizer.normalize was called
     assert len(normalize_called) > 0, 'TopologyNormalizer.normalize should be called'
-
-
-def test_legacy_path_delegates_to_nomad_fair_results_normalizer(
-    archive_empty, monkeypatch
-):
-    """Legacy baseline should delegate to nomad-FAIR ResultsNormalizer."""
-    from nomad.normalizing.results import ResultsNormalizer as LegacyResultsNormalizer
-
-    called = []
-    original_normalize = LegacyResultsNormalizer.normalize
-
-    def mock_normalize(self, archive, logger=None):
-        called.append(True)
-        return original_normalize(self, archive, logger)
-
-    monkeypatch.setattr(LegacyResultsNormalizer, 'normalize', mock_normalize)
-
-    normalizer = ResultsNormalizer()
-    try:
-        normalizer.normalize(archive_empty, LOGGER)
-    except Exception:
-        # Legacy normalize may fail in minimal fixture; delegation is what matters.
-        pass
-
-    assert called, 'Legacy ResultsNormalizer.normalize should be delegated to'
 
 
 def test_normalize_measurements_still_works(archive_with_data_schema):
