@@ -64,7 +64,6 @@ import ase.data
 import numpy as np
 from nomad.atomutils import Formula
 from nomad.datamodel import EntryArchive
-from nomad.datamodel.metainfo.simulation.calculation import BandEnergies
 from nomad.datamodel.results import (
     BSE,
     DFT,
@@ -72,14 +71,10 @@ from nomad.datamodel.results import (
     GW,
     TB,
     BandGap,
-    BandGapDeprecated,
-    BandStructureElectronic,
-    DOSElectronic,
     EELSMethodology,
     ElectronicProperties,
     EnergyDynamic,
     GeometryOptimization,
-    GreensFunctionsElectronic,
     Material,
     MDProvenance,
     Method,
@@ -97,13 +92,6 @@ from nomad.datamodel.results import (
 )
 from nomad.units import ureg
 from nomad.utils import traverse_reversed
-
-# Import runschema for DOS compatibility mapping
-try:
-    import runschema.calculation
-    import runschema.run
-except ImportError:
-    runschema = None
 
 # Don't import local Normalizer to avoid circular import
 # ResultsNormalizer inherits directly from nomad.normalizing.Normalizer
@@ -549,33 +537,6 @@ class ResultsNormalizerBase:
         if simulation.bse is not None:
             _map_excited_state_starting_point(simulation.bse, simulation.dft)
 
-    def _map_dos_data(
-        self, dos_section, output_index: int, dos_index: int
-    ) -> dict | None:
-        """Map one ElectronicDensityOfStates into DOSElectronic-compatible refs."""
-        energies = dos_section.energies
-        energies_points = energies.points if energies is not None else None
-        values = dos_section.value
-        if not valid_array(energies_points) or values is None:
-            return None
-        try:
-            if not valid_array(np.array(values.magnitude)):
-                return None
-        except Exception:
-            return None
-
-        spin_ch = dos_section.spin_channel or 0
-        has_projected = bool(dos_section.projected_dos)
-        dos_base_ref = f'/data/outputs/{output_index}/electronic_dos/{dos_index}'
-        return {
-            'energies_ref': f'{dos_base_ref}/energies/points',
-            'total_ref': dos_base_ref,
-            'spin_channel': spin_ch,
-            'has_projected': has_projected,
-            'energies_points': energies_points,
-            'values': values,
-        }
-
     @staticmethod
     def _method_label(model_method_ref=None) -> str | None:
         """Return scientific method provenance without an ownership marker."""
@@ -658,359 +619,6 @@ class ResultsNormalizerBase:
         geometry_optimization = properties.geometry_optimization
         if self._is_generated_compatibility_section(geometry_optimization):
             properties.geometry_optimization = None
-
-    def _ensure_legacy_run_calculation(
-        self, archive: EntryArchive
-    ) -> tuple[Any, int, int] | None:
-        """Return a dedicated, normalizer-owned compatibility calculation."""
-        if not runschema:
-            return None
-
-        runs = archive.run or []
-        run = next(
-            (
-                candidate
-                for candidate in runs
-                if self._is_generated_compatibility_section(candidate)
-            ),
-            None,
-        )
-        if run is None:
-            run = runschema.run.Run()
-            archive.run.append(run)
-        self._mark_generated_compatibility_section(run)
-
-        calculations = run.calculation
-        if calculations and len(calculations) > 0:
-            calculation = calculations[0]
-        else:
-            calculation = runschema.calculation.Calculation()
-            run.calculation.append(calculation)
-        self._mark_generated_compatibility_section(calculation)
-
-        return (
-            calculation,
-            list(archive.run).index(run),
-            list(run.calculation).index(calculation),
-        )
-
-    def _map_band_structure(
-        self, band_structure_section
-    ) -> BandStructureElectronic | None:
-        """Map one ElectronicBandStructure into results BandStructureElectronic."""
-        values = band_structure_section.value
-        if values is None:
-            return None
-        try:
-            if not valid_array(np.array(values.magnitude)):
-                return None
-        except Exception:
-            return None
-
-        energies_array = np.array(values.magnitude)
-        if energies_array.ndim == 0:
-            energies_array = energies_array[np.newaxis, np.newaxis, np.newaxis]
-        elif energies_array.ndim == 1:
-            energies_array = energies_array[np.newaxis, :, np.newaxis]
-        elif energies_array.ndim == 2:
-            energies_array = energies_array[np.newaxis, :, :]
-
-        segment_cls = BandEnergies
-        if runschema and hasattr(runschema, 'calculation'):
-            segment_cls = runschema.calculation.BandEnergies
-        legacy_segment = segment_cls()
-        legacy_segment.energies = energies_array * values.u
-
-        k_path = band_structure_section.k_path
-        k_points = k_path.points if k_path is not None else None
-        if not valid_array(k_points):
-            # Fallback for parsers that only store band-path information in
-            # model method numerical settings.
-            try:
-                numerical_settings = band_structure_section.m_xpath(
-                    'm_parent.m_parent.model_method[-1].numerical_settings',
-                    dict=False,
-                )
-            except Exception:
-                numerical_settings = None
-            for setting in numerical_settings or []:
-                k_line_path = getattr(setting, 'k_line_path', None)
-                k_points = k_line_path.points if k_line_path is not None else None
-                if not valid_array(k_points):
-                    # Some parsers expose only vertex path values without the
-                    # expanded line-point list.
-                    k_points = (
-                        k_line_path.high_symmetry_path_values
-                        if k_line_path is not None
-                        else None
-                    )
-                if valid_array(k_points):
-                    break
-        if not valid_array(k_points):
-            # Legacy/GUI path requires kpoints for distance axis construction.
-            return None
-
-        # A vertex-only or otherwise incomplete path cannot be reconstructed
-        # without knowing the parser's segment sampling and discontinuities.
-        n_energy_kpoints = int(energies_array.shape[1])
-        if np.array(k_points).shape[0] != n_energy_kpoints:
-            self.logger.warning(
-                'skipping band structure with mismatched k-point and energy axes',
-                n_kpoints=int(np.array(k_points).shape[0]),
-                n_energy_kpoints=n_energy_kpoints,
-            )
-            return None
-        legacy_segment.kpoints = k_points
-
-        reciprocal_cell = band_structure_section.reciprocal_cell
-
-        band_structure = BandStructureElectronic()
-        band_structure.segment = [legacy_segment]
-        try:
-            if reciprocal_cell is not None:
-                band_structure.reciprocal_cell = reciprocal_cell
-        except Exception:
-            pass
-
-        band_structure.spin_polarized = energies_array.shape[0] == 2
-
-        highest_occupied = band_structure_section.highest_occupied
-        lowest_unoccupied = band_structure_section.lowest_unoccupied
-        if highest_occupied is not None and lowest_unoccupied is not None:
-            band_gap = BandGapDeprecated()
-            band_gap.energy_highest_occupied = highest_occupied
-            band_gap.energy_lowest_unoccupied = lowest_unoccupied
-            band_gap.value = max(0.0, (lowest_unoccupied - highest_occupied).magnitude)
-            band_structure.m_add_sub_section(BandStructureElectronic.band_gap, band_gap)
-        return band_structure
-
-    def _map_greens_functions(self, output_section) -> GreensFunctionsElectronic | None:
-        """Map Green's function outputs into GreensFunctionsElectronic."""
-
-        def _to_array_quantity(value):
-            try:
-                array = np.array(value.magnitude)
-            except Exception:
-                return value
-            # TODO(results-compat): Legacy Greens fields have inconsistent/different
-            # shape+dtype expectations vs nomad-simulations complex payloads.
-            # Keep axis/metadata transfer for now and skip complex payload values.
-            if np.iscomplexobj(array):
-                return None
-            if array.ndim == 0:
-                return np.array([[array.item()]]) * value.u
-            return value
-
-        def _safe_set(section, name: str, value) -> bool:
-            if name not in available_fields:
-                return False
-            try:
-                setattr(section, name, value)
-                return True
-            except Exception:
-                self.logger.warning('skipping incompatible greens field', field=name)
-                return False
-
-        def _safe_set_axis_payload(
-            axis_name: str, axis_value, payload_name: str, payload_value
-        ) -> bool:
-            """Set an axis only when its corresponding physical payload is valid."""
-            converted_payload = _to_array_quantity(payload_value)
-            if converted_payload is None:
-                return False
-            if (
-                axis_name not in available_fields
-                or payload_name not in available_fields
-            ):
-                return False
-            try:
-                setattr(legacy_gf, payload_name, converted_payload)
-                setattr(legacy_gf, axis_name, axis_value)
-                return True
-            except Exception:
-                # MSection has no m_unset API. Passing None to m_set is the
-                # supported overwrite-mode mechanism for clearing a property.
-                legacy_gf.m_set(payload_name, None)
-                legacy_gf.m_set(axis_name, None)
-                self.logger.warning(
-                    'skipping incompatible greens axis/payload pair',
-                    axis=axis_name,
-                    payload=payload_name,
-                )
-                return False
-
-        # The legacy Green's-function payload quantities were removed from the
-        # current results schema. Skip this compatibility mapping when they are
-        # unavailable instead of failing every output normalization.
-        tau_quantity = GreensFunctionsElectronic.m_def.all_quantities.get('tau')
-        if tau_quantity is None:
-            return None
-        gf_type = tau_quantity.type
-        gf_cls = gf_type.target_quantity_def.m_parent.section_cls
-        available_fields = set(gf_cls.m_def.all_quantities.keys())
-        legacy_gf = gf_cls()
-        payload_mapped = False
-
-        for greens in output_section.electronic_greens_functions or []:
-            if (
-                greens.imaginary_time is not None
-                and valid_array(greens.imaginary_time.points)
-                and greens.value is not None
-            ):
-                payload_mapped = (
-                    _safe_set_axis_payload(
-                        'tau',
-                        greens.imaginary_time.points,
-                        'greens_function_tau',
-                        greens.value,
-                    )
-                    or payload_mapped
-                )
-            if (
-                greens.matsubara_frequency is not None
-                and valid_array(greens.matsubara_frequency.points)
-                and greens.value is not None
-            ):
-                matsubara_points = greens.matsubara_frequency.points
-                if np.iscomplexobj(np.array(matsubara_points.magnitude)):
-                    self.logger.warning(
-                        'skipping complex matsubara greens payload in results mapping'
-                    )
-                    continue
-                payload_mapped = (
-                    _safe_set_axis_payload(
-                        'matsubara_freq',
-                        matsubara_points,
-                        'greens_function_iw',
-                        greens.value,
-                    )
-                    or payload_mapped
-                )
-            if (
-                greens.real_frequency is not None
-                and valid_array(greens.real_frequency.points)
-                and greens.value is not None
-            ):
-                payload_mapped = (
-                    _safe_set_axis_payload(
-                        'frequencies',
-                        greens.real_frequency.points,
-                        'greens_function_freq',
-                        greens.value,
-                    )
-                    or payload_mapped
-                )
-
-        for self_energy in output_section.electronic_self_energies or []:
-            if (
-                self_energy.matsubara_frequency is not None
-                and valid_array(self_energy.matsubara_frequency.points)
-                and self_energy.value is not None
-            ):
-                matsubara_points = self_energy.matsubara_frequency.points
-                if np.iscomplexobj(np.array(matsubara_points.magnitude)):
-                    continue
-                payload_mapped = (
-                    _safe_set_axis_payload(
-                        'matsubara_freq',
-                        matsubara_points,
-                        'self_energy_iw',
-                        self_energy.value,
-                    )
-                    or payload_mapped
-                )
-            if (
-                self_energy.real_frequency is not None
-                and valid_array(self_energy.real_frequency.points)
-                and self_energy.value is not None
-            ):
-                payload_mapped = (
-                    _safe_set_axis_payload(
-                        'frequencies',
-                        self_energy.real_frequency.points,
-                        'self_energy_freq',
-                        self_energy.value,
-                    )
-                    or payload_mapped
-                )
-
-        for hybridization in output_section.hybridization_functions or []:
-            if (
-                hybridization.matsubara_frequency is not None
-                and valid_array(hybridization.matsubara_frequency.points)
-                and hybridization.value is not None
-            ):
-                matsubara_points = hybridization.matsubara_frequency.points
-                if np.iscomplexobj(np.array(matsubara_points.magnitude)):
-                    continue
-                if 'hybridization_function_iw' in available_fields:
-                    payload_mapped = (
-                        _safe_set_axis_payload(
-                            'matsubara_freq',
-                            matsubara_points,
-                            'hybridization_function_iw',
-                            hybridization.value,
-                        )
-                        or payload_mapped
-                    )
-            if (
-                hybridization.real_frequency is not None
-                and valid_array(hybridization.real_frequency.points)
-                and hybridization.value is not None
-            ):
-                payload_mapped = (
-                    _safe_set_axis_payload(
-                        'frequencies',
-                        hybridization.real_frequency.points,
-                        'hybridization_function_freq',
-                        hybridization.value,
-                    )
-                    or payload_mapped
-                )
-
-        for qp_weight in output_section.quasiparticle_weights or []:
-            if qp_weight.value is not None and valid_array(np.array(qp_weight.value)):
-                payload_mapped = (
-                    _safe_set(legacy_gf, 'quasiparticle_weights', qp_weight.value)
-                    or payload_mapped
-                )
-
-        chemical_potentials = output_section.chemical_potentials or []
-        if chemical_potentials and chemical_potentials[0].value is not None:
-            payload_mapped = (
-                _safe_set(legacy_gf, 'chemical_potential', chemical_potentials[0].value)
-                or payload_mapped
-            )
-
-        if not payload_mapped:
-            return None
-
-        greens_functions = GreensFunctionsElectronic()
-        if legacy_gf.m_is_set('tau'):
-            greens_functions.tau = legacy_gf
-        if legacy_gf.m_is_set('matsubara_freq'):
-            greens_functions.matsubara_freq = legacy_gf
-        if legacy_gf.m_is_set('frequencies'):
-            greens_functions.frequencies = legacy_gf
-        if legacy_gf.m_is_set('greens_function_tau'):
-            greens_functions.greens_function_tau = legacy_gf
-        if legacy_gf.m_is_set('greens_function_iw'):
-            greens_functions.greens_function_iw = legacy_gf
-        if legacy_gf.m_is_set('self_energy_iw'):
-            greens_functions.self_energy_iw = legacy_gf
-        if legacy_gf.m_is_set('greens_function_freq'):
-            greens_functions.greens_function_freq = legacy_gf
-        if legacy_gf.m_is_set('self_energy_freq'):
-            greens_functions.self_energy_freq = legacy_gf
-        if legacy_gf.m_is_set('hybridization_function_freq'):
-            greens_functions.hybridization_function_freq = legacy_gf
-        if legacy_gf.m_is_set('orbital_occupations'):
-            greens_functions.orbital_occupations = legacy_gf
-        if legacy_gf.m_is_set('quasiparticle_weights'):
-            greens_functions.quasiparticle_weights = legacy_gf
-        if legacy_gf.m_is_set('chemical_potential'):
-            greens_functions.chemical_potential = legacy_gf
-        return greens_functions
 
     def _map_spectrum(self, spectrum_section, spectrum_type: str) -> Spectra | None:
         energies_section = spectrum_section.energies
@@ -1129,15 +737,6 @@ class ResultsNormalizerBase:
                     ]
 
         self._remove_generated_compatibility_results(properties)
-        if runschema:
-            for compatibility_run in archive.run or []:
-                if not self._is_generated_compatibility_section(compatibility_run):
-                    continue
-                for compatibility_calculation in compatibility_run.calculation or []:
-                    self._mark_generated_compatibility_section(compatibility_calculation)
-                    compatibility_calculation.dos_electronic = []
-                    compatibility_calculation.band_structure_electronic = []
-
         # Geometry optimization workflow metadata is consumed directly by the
         # geometry optimization card and should be available even when there is
         # no electronic/spectroscopic payload in outputs.
@@ -1153,14 +752,19 @@ class ResultsNormalizerBase:
         if not outputs:
             return
 
-        had_dos_input = any(len(output.electronic_dos or []) > 0 for output in outputs)
-
+        # Deliberately skip data-schema properties whose current results fields
+        # require references into legacy run/calculation sections. Those should
+        # come from legacy parsers until results can visualize them directly
+        # from archive.data:
+        # - Outputs.electronic_dos -> properties.electronic.dos_electronic
+        # - Outputs.electronic_band_structures
+        #   -> properties.electronic.band_structure_electronic
+        # - Outputs.electronic_greens_functions, electronic_self_energies,
+        #   hybridization_functions, quasiparticle_weights, chemical_potentials
+        #   -> properties.electronic.greens_functions_electronic
         # Electronic properties are selected as one coherent source group. Outputs
         # with different explicit system/method references must not be combined.
         latest_band_gaps: list[BandGap] = []
-        latest_dos_sections: list[DOSElectronic] = []
-        latest_band_structures: list[BandStructureElectronic] = []
-        latest_greens_functions: list[GreensFunctionsElectronic] = []
         electronic_groups: dict[tuple[int | None, int | None], dict[str, Any]] = {}
         spectra_sections: list[Spectra] = []
         rg_sections: list[RadiusOfGyration] = []
@@ -1196,28 +800,9 @@ class ResultsNormalizerBase:
 
         for index, output in enumerate(outputs):
             output_band_gaps: list[BandGap] = []
-            output_dos_sections: list[DOSElectronic] = []
-            output_band_structures: list[BandStructureElectronic] = []
-            output_greens_functions: list[GreensFunctionsElectronic] = []
-            output_highest_occupied = None
             output_system_ref = output.model_system_ref
             output_method_ref = output.model_method_ref
             method_label = self._method_label(output_method_ref)
-
-            for band_structure in output.electronic_band_structures or []:
-                output_highest_occupied = band_structure.highest_occupied
-                if output_highest_occupied is not None:
-                    break
-            if output_highest_occupied is None:
-                for eigenvalues in output.electronic_eigenvalues or []:
-                    output_highest_occupied = eigenvalues.highest_occupied
-                    if output_highest_occupied is not None:
-                        break
-            if output_highest_occupied is None:
-                for dos in output.electronic_dos or []:
-                    output_highest_occupied = dos.energies_origin
-                    if output_highest_occupied is not None:
-                        break
 
             for bg in output.electronic_band_gaps or []:
                 if bg.value is None:
@@ -1225,93 +810,9 @@ class ResultsNormalizerBase:
                 bg_result = BandGap()
                 bg_result.value = bg.value
                 bg_result.type = bg.type
-                if runschema and method_label:
-                    bg_result.provenance = (
-                        runschema.calculation.ElectronicStructureProvenance(
-                            label=method_label
-                        )
-                    )
-                if output_highest_occupied is not None:
-                    bg_result.energy_highest_occupied = output_highest_occupied
-                    bg_result.energy_lowest_unoccupied = (
-                        output_highest_occupied + bg.value
-                    )
                 output_band_gaps.append(bg_result)
 
-            dos_data_sections: list[dict] = []
-            has_projected = False
-            for dos_index, dos in enumerate(output.electronic_dos or []):
-                mapped = self._map_dos_data(dos, index, dos_index)
-                if mapped is None:
-                    continue
-                dos_data_sections.append(mapped)
-                has_projected = has_projected or mapped['has_projected']
-
-            if dos_data_sections:
-                totals = [
-                    d['total_ref'] for d in dos_data_sections if d.get('total_ref')
-                ]
-                if totals:
-                    dos_result = DOSElectronic()
-                    dos_result.label = method_label
-                    dos_result.energies = dos_data_sections[0]['energies_ref']
-                    dos_result.total = totals
-                    dos_result.spin_polarized = len(dos_data_sections) == 2
-                    if output_highest_occupied is not None:
-                        dos_result.energy_fermi = output_highest_occupied
-                        dos_bg = BandGapDeprecated()
-                        dos_bg.energy_highest_occupied = output_highest_occupied
-                        dos_result.m_add_sub_section(DOSElectronic.band_gap, dos_bg)
-                    output_dos_sections.append(dos_result)
-
-            for band_structure in output.electronic_band_structures or []:
-                mapped_band_structure = self._map_band_structure(band_structure)
-                if mapped_band_structure:
-                    mapped_band_structure.label = method_label
-                    output_band_structures.append(mapped_band_structure)
-
-            # Ensure compatibility card consumers can read a complete band-gap
-            # entry from band-structure references when output-level band gaps
-            # are available but parser band-structure sections do not carry
-            # explicit lowest-unoccupied values.
             if output_band_gaps:
-                fallback_bg = next(
-                    (
-                        bg
-                        for bg in output_band_gaps
-                        if bg.value is not None
-                        and bg.energy_highest_occupied is not None
-                        and bg.energy_lowest_unoccupied is not None
-                    ),
-                    None,
-                )
-                if fallback_bg is not None:
-                    for mapped_band_structure in output_band_structures:
-                        existing_bg = mapped_band_structure.band_gap or []
-                        has_complete_bg = any(
-                            bg.value is not None
-                            and bg.energy_highest_occupied is not None
-                            and bg.energy_lowest_unoccupied is not None
-                            for bg in existing_bg
-                        )
-                        if has_complete_bg:
-                            continue
-                        mapped_band_structure.m_add_sub_section(
-                            BandStructureElectronic.band_gap,
-                            BandGapDeprecated().m_from_dict(fallback_bg.m_to_dict()),
-                        )
-
-            mapped_greens_functions = self._map_greens_functions(output)
-            if mapped_greens_functions:
-                mapped_greens_functions.label = method_label
-                output_greens_functions.append(mapped_greens_functions)
-
-            if (
-                output_band_gaps
-                or output_dos_sections
-                or output_band_structures
-                or output_greens_functions
-            ):
                 group_key = (
                     id(output_system_ref) if output_system_ref is not None else None,
                     id(output_method_ref) if output_method_ref is not None else None,
@@ -1323,22 +824,11 @@ class ResultsNormalizerBase:
                         'model_method_ref': output_method_ref,
                         'last_index': index,
                         'band_gaps': [],
-                        'dos_sections': [],
-                        'dos_payload': [],
-                        'band_structures': [],
-                        'greens_functions': [],
                     },
                 )
                 group['last_index'] = index
                 if output_band_gaps:
                     group['band_gaps'] = output_band_gaps
-                if output_dos_sections:
-                    group['dos_sections'] = output_dos_sections
-                    group['dos_payload'] = dos_data_sections
-                if output_band_structures:
-                    group['band_structures'] = output_band_structures
-                if output_greens_functions:
-                    group['greens_functions'] = output_greens_functions
 
             for absorption in output.absorption_spectra or []:
                 mapped_spectrum = self._map_spectrum(absorption, 'unavailable')
@@ -1452,9 +942,6 @@ class ResultsNormalizerBase:
 
             for group in selected_groups:
                 latest_band_gaps.extend(group['band_gaps'])
-                latest_dos_sections.extend(group['dos_sections'])
-                latest_band_structures.extend(group['band_structures'])
-                latest_greens_functions.extend(group['greens_functions'])
 
             discarded_groups = len(electronic_groups) - len(selected_groups)
             if discarded_groups:
@@ -1465,108 +952,14 @@ class ResultsNormalizerBase:
 
         if not (
             latest_band_gaps
-            or latest_dos_sections
-            or latest_band_structures
-            or latest_greens_functions
             or spectra_sections
             or rg_sections
             or temperature_series
             or potential_energy_series
         ):
-            if had_dos_input:
-                dos_warning = (
-                    'Skipping DOS mapping for results.properties.electronic.'
-                    'dos_electronic: could not build payload from data-schema outputs.'
-                )
-                self.logger.warning(dos_warning)
             return
 
-        has_electronic_payload = bool(
-            latest_band_gaps
-            or latest_dos_sections
-            or latest_band_structures
-            or latest_greens_functions
-        )
-
-        # Prefer run/calculation DOS compatibility paths when runschema is available,
-        # so legacy GUI resolvers can follow runschema-typed references robustly.
-        if runschema and latest_dos_sections:
-            compatibility_target = self._ensure_legacy_run_calculation(archive)
-            if compatibility_target is not None:
-                calculation, run_index, calculation_index = compatibility_target
-                calculation.dos_electronic = []
-                calculation_path = f'/run/{run_index}/calculation/{calculation_index}'
-                # Each method contributes its own legacy Dos sections, so indices
-                # run across the shared list instead of restarting per group.
-                for group in selected_groups:
-                    dos_sections = group['dos_sections']
-                    dos_payload = group['dos_payload']
-                    if not (dos_sections and dos_payload):
-                        continue
-                    energies_index = len(calculation.dos_electronic)
-                    run_total_refs: list[str] = []
-                    for dos_entry in dos_payload:
-                        legacy_dos = runschema.calculation.Dos()
-                        legacy_dos.energies = dos_entry['energies_points']
-
-                        legacy_total = runschema.calculation.DosValues()
-                        legacy_total.value = dos_entry['values']
-                        legacy_total.spin = int(dos_entry.get('spin_channel', 0) or 0)
-                        legacy_dos.total.append(legacy_total)
-
-                        run_total_refs.append(
-                            f'{calculation_path}/dos_electronic'
-                            f'/{len(calculation.dos_electronic)}/total/0'
-                        )
-                        calculation.dos_electronic.append(legacy_dos)
-
-                    dos_sections[
-                        0
-                    ].energies = (
-                        f'{calculation_path}/dos_electronic/{energies_index}/energies'
-                    )
-                    dos_sections[0].total = run_total_refs
-
-        # `results.properties.electronic.band_structure_electronic.segment` is a
-        # reference-typed quantity. For valid references, materialize compatible
-        # legacy sections under run/calculation and point results segments there.
-        if runschema and latest_band_structures:
-            compatibility_target = self._ensure_legacy_run_calculation(archive)
-            if compatibility_target is not None:
-                calculation, _, _ = compatibility_target
-                calculation.band_structure_electronic = []
-                run_band_structures: list[BandStructureElectronic] = []
-                for band_structure in latest_band_structures:
-                    legacy_bs = runschema.calculation.BandStructure()
-                    if band_structure.reciprocal_cell is not None:
-                        legacy_bs.reciprocal_cell = band_structure.reciprocal_cell
-                    if band_structure.energy_fermi is not None:
-                        legacy_bs.energy_fermi = band_structure.energy_fermi
-
-                    for segment in band_structure.segment or []:
-                        legacy_segment = runschema.calculation.BandEnergies()
-                        legacy_segment.energies = segment.energies
-                        legacy_segment.kpoints = segment.kpoints
-                        legacy_bs.segment.append(legacy_segment)
-
-                    calculation.band_structure_electronic.append(legacy_bs)
-
-                    bs_result = BandStructureElectronic()
-                    bs_result.label = band_structure.label
-                    bs_result.spin_polarized = band_structure.spin_polarized
-                    bs_result.energy_fermi = band_structure.energy_fermi
-                    bs_result.reciprocal_cell = band_structure.reciprocal_cell
-                    bs_result.segment = legacy_bs.segment
-                    for info in band_structure.band_gap or []:
-                        info_new = BandGapDeprecated().m_from_dict(info.m_to_dict())
-                        bs_result.m_add_sub_section(
-                            BandStructureElectronic.band_gap, info_new
-                        )
-                    run_band_structures.append(bs_result)
-
-                latest_band_structures = run_band_structures
-
-        if has_electronic_payload:
+        if latest_band_gaps:
             electronic = properties.electronic
             if electronic is None:
                 electronic = properties.m_create(ElectronicProperties)
@@ -1574,19 +967,6 @@ class ResultsNormalizerBase:
             for band_gap in latest_band_gaps:
                 self._mark_generated_compatibility_section(band_gap)
                 electronic.m_add_sub_section(ElectronicProperties.band_gap, band_gap)
-            for dos in latest_dos_sections:
-                self._mark_generated_compatibility_section(dos)
-                electronic.m_add_sub_section(ElectronicProperties.dos_electronic, dos)
-            for band_structure in latest_band_structures:
-                self._mark_generated_compatibility_section(band_structure)
-                electronic.m_add_sub_section(
-                    ElectronicProperties.band_structure_electronic, band_structure
-                )
-            for greens in latest_greens_functions:
-                self._mark_generated_compatibility_section(greens)
-                electronic.m_add_sub_section(
-                    ElectronicProperties.greens_functions_electronic, greens
-                )
 
         if spectra_sections:
             spectroscopic = properties.spectroscopic
@@ -1630,13 +1010,6 @@ class ResultsNormalizerBase:
                 thermodynamic.m_add_sub_section(
                     ThermodynamicProperties.trajectory, trajectory
                 )
-
-        if had_dos_input and not latest_dos_sections:
-            dos_warning = (
-                'Skipping DOS mapping for results.properties.electronic.'
-                'dos_electronic: could not build payload from data-schema outputs.'
-            )
-            self.logger.warning(dos_warning)
 
         self._log_unmapped_output_groups(outputs)
 
