@@ -4,9 +4,8 @@ from nomad.config.models.plugins import NormalizerEntryPoint
 class ResultsNormalizerEntryPoint(NormalizerEntryPoint):
     """Entry point for the Results normalizer with v2 data schema support.
 
-    This normalizer replaces the legacy ResultsNormalizer from nomad-FAIR
-    when v2 data schema is present. It automatically detects schema version
-    and routes to the appropriate normalization cascade.
+    This normalizer augments data-schema archives with results derived from
+    nomad-simulations data.
     """
 
     level: int = 3
@@ -58,7 +57,6 @@ class ResultsNormalizerEntryPoint(NormalizerEntryPoint):
 results_normalizer_plugin = ResultsNormalizerEntryPoint(
     name='Results',
     description=(
-        'Results normalizer with v2 data schema support and backward '
-        'compatibility for v1 run schema.'
+        'Results normalizer that adds nomad-simulations data-schema support.'
     ),
 )

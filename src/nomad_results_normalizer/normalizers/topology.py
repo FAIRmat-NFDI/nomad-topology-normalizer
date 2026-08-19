@@ -488,18 +488,42 @@ class TopologyNormalizer(Normalizer):
             ).material(populate_topology=False)
 
         if self.entry_archive.results and self.entry_archive.results.material:
-            topology = self.topology(self.entry_archive.results.material, system_v2)
+            material = self.entry_archive.results.material
+            existing_topology = list(material.topology or [])
+            material.topology = []
+            try:
+                topology = self.topology(material, system_v2)
+            except Exception:
+                material.topology = existing_topology
+                raise
             if topology:
-                self.entry_archive.results.material.topology.extend(topology)
+                if self._has_visualization_topology_payload(topology):
+                    material.topology.extend(topology)
+                elif existing_topology:
+                    self.logger.error(
+                        'Data-schema topology does not contain atoms or atoms_ref; '
+                        'restoring legacy topology for structure visualization.'
+                    )
+                    material.topology.extend(existing_topology)
+                else:
+                    self.logger.error(
+                        'Data-schema topology does not contain atoms or atoms_ref, '
+                        'and no legacy topology is available to restore.'
+                    )
+                    material.topology.extend(topology)
+            elif existing_topology:
+                material.topology.extend(existing_topology)
+
+    @staticmethod
+    def _has_visualization_topology_payload(topology: list[System]) -> bool:
+        return any(
+            getattr(system, 'atoms', None) is not None
+            or getattr(system, 'atoms_ref', None) is not None
+            for system in topology
+        )
 
     def topology(self, material, system_v2=None) -> list[System] | None:
         """Returns a dictionary that contains all of the topologies mapped by id."""
-        # If topology already exists (e.g. written by another normalizer), do
-        # not overwrite it.
-        topology = self.entry_archive.m_xpath('results.material.topology')
-        if topology:
-            return None
-
         # First: topology from data schema calculation (v2)
         topology = self.topology_calculation()
 

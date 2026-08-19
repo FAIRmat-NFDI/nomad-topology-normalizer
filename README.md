@@ -4,6 +4,34 @@ Topology Normalizer
 
 This `nomad` plugin was generated with `Cookiecutter` along with `@nomad`'s [`cookiecutter-nomad-plugin`](https://github.com/FAIRmat-NFDI/cookiecutter-nomad-plugin) template.
 
+## Current visualization support
+
+For entries parsed with the `nomad-simulations` data schema, this plugin only
+populates results fields that are functional in the current NOMAD GUI or are
+needed for indexing/search. The currently supported visualization paths are:
+
+- Structure/topology viewer from `results.material.topology`.
+- Spectra plots from `results.properties.spectroscopic.spectra`, currently
+  mapped from absorption and XAS spectra in `archive.data.outputs`.
+- Radius of gyration plots from
+  `results.properties.structural.radius_of_gyration`.
+- Thermodynamic trajectory plots from
+  `results.properties.thermodynamic.trajectory`, currently mapped from
+  temperature and potential/total energy series in timed trajectory outputs.
+- Geometry optimization convergence values from
+  `results.properties.geometry_optimization`.
+
+The plugin deliberately does not map data-schema DOS, band structures, or
+Green's functions into legacy results fields. Those current GUI visualizations
+expect references into legacy `run/calculation` sections; legacy parsers should
+continue to provide them until the GUI can visualize these properties directly
+from `archive.data`.
+
+Direct electronic band gaps are still populated in
+`results.properties.electronic.band_gap` for results/index access, but the
+current entry-page electronic visualization primarily displays band gaps through
+legacy band-structure result sections.
+
 ## Development
 
 If you want to develop locally this plugin, clone the project and in the plugin folder, create a virtual environment (you can use Python 3.10, 3.11 or 3.12):

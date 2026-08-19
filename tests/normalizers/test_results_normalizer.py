@@ -1,7 +1,5 @@
 """Tests for ResultsNormalizer schema detection and routing logic."""
 
-from types import SimpleNamespace
-
 import numpy as np
 import pytest
 from nomad.datamodel import EntryArchive, EntryMetadata
@@ -11,7 +9,6 @@ from nomad.datamodel.results import (
     BandStructureElectronic,
     DOSElectronic,
     ElectronicProperties,
-    GreensFunctionsElectronic,
     Properties,
     Results,
 )
@@ -29,18 +26,13 @@ from nomad_simulations.schema_packages.model_method import (
     Wannier,
 )
 from nomad_simulations.schema_packages.model_system import ModelSystem
-from nomad_simulations.schema_packages.numerical_settings import (
-    KSpace,
-    SelfConsistency,
-    Smearing,
-)
+from nomad_simulations.schema_packages.numerical_settings import SelfConsistency
 from nomad_simulations.schema_packages.outputs import Outputs, TrajectoryOutputs
 from nomad_simulations.schema_packages.properties import (
     AbsorptionSpectrum,
     ElectronicBandGap,
     ElectronicBandStructure,
     ElectronicDensityOfStates,
-    ElectronicGreensFunction,
     TotalForce,
 )
 from nomad_simulations.schema_packages.properties import (
@@ -54,10 +46,6 @@ from nomad_simulations.schema_packages.properties import (
 )
 from nomad_simulations.schema_packages.variables import (
     Energy2,
-    Frequency,
-    ImaginaryTime,
-    KLinePath,
-    MatsubaraFrequency,
 )
 from nomad_simulations.schema_packages.workflow.general import (
     EnergyConvergenceTarget,
@@ -184,7 +172,7 @@ def archive_empty():
 
 
 def test_schema_detection_data_schema(archive_with_data_schema, caplog):
-    """Test that the data schema is detected and routed correctly."""
+    """Data-schema archives should run the plugin path."""
     normalizer = ResultsNormalizer()
 
     # Clear any previous log records
@@ -193,21 +181,17 @@ def test_schema_detection_data_schema(archive_with_data_schema, caplog):
     # Run normalization
     normalizer.normalize(archive_with_data_schema, LOGGER)
 
-    # Check that the correct path was taken
-    # Look for the info log message
     assert any(
         'data-schema results normalization' in record.message
         for record in caplog.records
     ), 'Should log data-schema path'
-
-    # Should NOT see legacy message
     assert not any(
         'legacy results normalization' in record.message for record in caplog.records
-    ), 'Should not log legacy path'
+    ), 'Plugin should not run legacy results normalization itself'
 
 
 def test_schema_detection_no_schema(archive_empty, caplog):
-    """Test behavior when neither data schema nor legacy schema is present."""
+    """Archives without data-schema content should be skipped by this plugin."""
     normalizer = ResultsNormalizer()
 
     # Clear any previous log records
@@ -220,13 +204,13 @@ def test_schema_detection_no_schema(archive_empty, caplog):
         # May fail without proper data - that's OK
         pass
 
-    # Should take legacy path (default fallback)
     assert any(
-        'legacy results normalization' in record.message for record in caplog.records
-    ), 'Should log legacy path as fallback'
+        'Skipping data-schema results normalization' in record.message
+        for record in caplog.records
+    ), 'Should skip data-schema path when no nomad-simulations data exists'
 
 
-def test_non_simulation_data_schema_uses_legacy_path(caplog):
+def test_non_simulation_data_schema_skips_plugin_path(caplog):
     """Custom archive.data without model_system should not use data-schema path."""
     archive = EntryArchive(metadata=EntryMetadata())
     archive.results = Results()
@@ -240,18 +224,14 @@ def test_non_simulation_data_schema_uses_legacy_path(caplog):
     normalizer = ResultsNormalizer()
     caplog.clear()
 
-    try:
-        normalizer.normalize(archive, LOGGER)
-    except Exception:
-        # Legacy path may still fail depending on environment; routing is
-        # tested via logs.
-        pass
+    normalizer.normalize(archive, LOGGER)
 
     assert any(
-        'legacy results normalization' in record.message for record in caplog.records
-    ), 'Non-simulation archive.data should use legacy path'
+        'Skipping data-schema results normalization' in record.message
+        for record in caplog.records
+    ), 'Non-simulation archive.data should be skipped by this plugin'
     assert not any(
-        'data-schema results normalization' in record.message
+        record.message == 'Running data-schema results normalization'
         for record in caplog.records
     ), 'Non-simulation archive.data should not use data-schema path'
 
@@ -561,16 +541,6 @@ def test_data_schema_maps_outputs_electronic_properties():
     band_structure = ElectronicBandStructure(value=np.array([[1.0], [1.1]]) * ureg.eV)
     band_structure.k_path = _kline_path()
     output.electronic_band_structures.append(band_structure)
-    greens_value_type = ElectronicGreensFunction.m_def.all_quantities['value'].type
-    if (
-        'tau' in GreensFunctionsElectronic.m_def.all_quantities
-        and greens_value_type.__class__.__name__ != 'HDF5Dataset'
-    ):
-        greens_function = ElectronicGreensFunction(value=(1.0 + 0.0j) / ureg.eV)
-        greens_function.matsubara_frequency = MatsubaraFrequency(
-            points=np.array([0.1j, 0.2j]) * ureg.eV
-        )
-        output.electronic_greens_functions.append(greens_function)
     absorption = AbsorptionSpectrum(value=np.array([0.5, 0.6]) / ureg.eV)
     absorption.energies = Energy2(points=np.array([0.0, 1.0]) * ureg.eV)
     output.absorption_spectra.append(absorption)
@@ -592,27 +562,20 @@ def test_data_schema_maps_outputs_electronic_properties():
     assert electronic is not None
     assert electronic.band_gap
     assert electronic.band_gap[0].value is not None
-    if HAS_RUNSCHEMA:
-        assert not electronic.dos_electronic_new
-        assert electronic.dos_electronic
-    else:
-        assert not electronic.dos_electronic_new
-    assert electronic.band_structure_electronic
-    assert electronic.band_structure_electronic[0].segment
+    assert not electronic.dos_electronic_new
+    assert not electronic.dos_electronic
+    assert not electronic.band_structure_electronic
     assert archive.results.properties.spectroscopic is not None
     assert archive.results.properties.spectroscopic.spectra
     assert archive.results.properties.structural is not None
     assert archive.results.properties.structural.radius_of_gyration
     assert archive.results.properties.thermodynamic is not None
     assert archive.results.properties.thermodynamic.trajectory
-    if HAS_RUNSCHEMA:
-        assert len(getattr(archive, 'run', None) or []) == 1
-    else:
-        assert len(getattr(archive, 'run', None) or []) == 0
+    assert len(getattr(archive, 'run', None) or []) == 0
 
 
 def test_data_schema_uses_latest_output_for_electronic_properties():
-    """Electronic mapping should keep latest output payload for legacy parity."""
+    """Electronic mapping should keep latest direct data-schema payload."""
     archive = EntryArchive(metadata=EntryMetadata())
     archive.results = Results()
     archive.results.properties = Properties()
@@ -661,7 +624,8 @@ def test_data_schema_uses_latest_output_for_electronic_properties():
     assert electronic is not None
     assert len(electronic.band_gap or []) == 1
     assert electronic.band_gap[0].value.to('eV').magnitude == pytest.approx(2.5)
-    assert len(electronic.band_structure_electronic or []) == 1
+    assert not electronic.band_structure_electronic
+    assert len(getattr(archive, 'run', None) or []) == 0
 
 
 def test_data_schema_prefers_representative_system_outputs_for_electronic_properties():
@@ -742,11 +706,12 @@ def test_data_schema_prefers_representative_system_outputs_for_electronic_proper
     assert electronic is not None
     assert len(electronic.band_gap or []) == 1
     assert electronic.band_gap[0].value.to('eV').magnitude == pytest.approx(1.5)
-    assert len(electronic.band_structure_electronic or []) == 1
+    assert not electronic.band_structure_electronic
+    assert len(getattr(archive, 'run', None) or []) == 0
 
 
-def test_data_schema_band_structure_mapping_creates_valid_segment_refs():
-    """Band mapping from data-schema outputs should create non-orphan segment refs."""
+def test_data_schema_does_not_map_band_structure_to_legacy_results():
+    """Data-schema band structures should not create run-backed result refs."""
     archive = EntryArchive(metadata=EntryMetadata())
     archive.results = Results()
     archive.results.properties = Properties()
@@ -783,177 +748,17 @@ def test_data_schema_band_structure_mapping_creates_valid_segment_refs():
     normalizer.normalize(archive, LOGGER)
 
     serialized = archive.m_to_dict()
-    assert serialized.get('run')
-    bs = (
+    assert not serialized.get('run')
+    assert not (
         serialized.get('results', {})
         .get('properties', {})
         .get('electronic', {})
         .get('band_structure_electronic', [])
     )
-    assert bs
-    segments = bs[0].get('segment', [])
-    assert segments
-    assert segments[0] != '/'
-    assert str(segments[0]).startswith(
-        '/run/0/calculation/0/band_structure_electronic/0/segment/'
-    )
-    assert archive.m_resolve(str(segments[0])) is not None
 
 
-def test_data_schema_band_structure_uses_numerical_settings_kline_path_fallback():
-    """Band mapping should fall back to model-method k_line_path.
-
-    This fallback is used when `bs.k_path` is missing.
-    """
-    archive = EntryArchive(metadata=EntryMetadata())
-    archive.results = Results()
-    archive.results.properties = Properties()
-
-    simulation = Simulation()
-    simulation.program = Program(name='VASP')
-
-    dft = DFT()
-    k_space = KSpace()
-    k_space.k_line_path = _kline_path()
-    dft.numerical_settings.append(k_space)
-    simulation.model_method.append(dft)
-
-    model_system = ModelSystem(
-        name='test_system',
-        type='bulk',
-        is_representative=True,
-        positions=np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]]) * ureg.angstrom,
-        n_particles=2,
-    )
-    model_system.particle_states.append(
-        AtomsState(chemical_symbol='Si', atomic_number=14)
-    )
-    model_system.particle_states.append(
-        AtomsState(chemical_symbol='Si', atomic_number=14)
-    )
-    model_system.lattice_vectors = np.eye(3) * 5.43 * ureg.angstrom
-    model_system.periodic_boundary_conditions = [True, True, True]
-    simulation.model_system.append(model_system)
-
-    output = Outputs()
-    band_structure = ElectronicBandStructure(value=np.array([[1.0], [1.1]]) * ureg.eV)
-    output.electronic_band_structures.append(band_structure)
-    simulation.outputs.append(output)
-    archive.data = simulation
-
-    normalizer = ResultsNormalizer()
-    normalizer.normalize(archive, LOGGER)
-
-    electronic = archive.results.properties.electronic
-    assert electronic is not None
-    assert electronic.band_structure_electronic
-    segments = electronic.band_structure_electronic[0].segment
-    assert segments
-    assert segments[0].m_def.name != 'EntryArchive'
-    assert np.array(segments[0].kpoints).shape[0] > 0
-
-
-def test_data_schema_band_structure_skips_non_kspace_numerical_settings():
-    """Fallback search should ignore numerical settings without `k_line_path`."""
-    archive = EntryArchive(metadata=EntryMetadata())
-    archive.results = Results()
-    archive.results.properties = Properties()
-
-    simulation = Simulation()
-    simulation.program = Program(name='VASP')
-
-    dft = DFT()
-    dft.numerical_settings.append(Smearing())
-    k_space = KSpace()
-    k_space.k_line_path = _kline_path()
-    dft.numerical_settings.append(k_space)
-    simulation.model_method.append(dft)
-
-    model_system = ModelSystem(
-        name='test_system',
-        type='bulk',
-        is_representative=True,
-        positions=np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]]) * ureg.angstrom,
-        n_particles=2,
-    )
-    model_system.particle_states.append(
-        AtomsState(chemical_symbol='Si', atomic_number=14)
-    )
-    model_system.particle_states.append(
-        AtomsState(chemical_symbol='Si', atomic_number=14)
-    )
-    model_system.lattice_vectors = np.eye(3) * 5.43 * ureg.angstrom
-    model_system.periodic_boundary_conditions = [True, True, True]
-    simulation.model_system.append(model_system)
-
-    output = Outputs()
-    band_structure = ElectronicBandStructure(value=np.array([[1.0], [1.1]]) * ureg.eV)
-    output.electronic_band_structures.append(band_structure)
-    simulation.outputs.append(output)
-    archive.data = simulation
-
-    normalizer = ResultsNormalizer()
-    normalizer.normalize(archive, LOGGER)
-
-    electronic = archive.results.properties.electronic
-    assert electronic is not None
-    assert electronic.band_structure_electronic
-    segments = electronic.band_structure_electronic[0].segment
-    assert segments
-    assert np.array(segments[0].kpoints).shape[0] > 0
-
-
-def test_data_schema_band_structure_skips_ambiguous_vertex_only_path():
-    """Vertex-only paths must not be synthetically resampled onto energy points."""
-    archive = EntryArchive(metadata=EntryMetadata())
-    archive.results = Results()
-    archive.results.properties = Properties()
-
-    simulation = Simulation()
-    simulation.program = Program(name='exciting')
-
-    dft = DFT()
-    k_space = KSpace()
-    k_line_path = KLinePath()
-    k_line_path.high_symmetry_path_values = np.array(
-        [[0.0, 0.0, 0.0], [0.5, 0.0, 0.0], [0.5, 0.5, 0.0]]
-    )
-    k_space.k_line_path = k_line_path
-    dft.numerical_settings.append(k_space)
-    simulation.model_method.append(dft)
-
-    model_system = ModelSystem(
-        name='test_system',
-        type='bulk',
-        is_representative=True,
-        positions=np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]]) * ureg.angstrom,
-        n_particles=2,
-    )
-    model_system.particle_states.append(
-        AtomsState(chemical_symbol='Si', atomic_number=14)
-    )
-    model_system.particle_states.append(
-        AtomsState(chemical_symbol='Si', atomic_number=14)
-    )
-    model_system.lattice_vectors = np.eye(3) * 5.43 * ureg.angstrom
-    model_system.periodic_boundary_conditions = [True, True, True]
-    simulation.model_system.append(model_system)
-
-    output = Outputs()
-    band_structure = ElectronicBandStructure(value=np.array([[1.0], [1.1]]) * ureg.eV)
-    output.electronic_band_structures.append(band_structure)
-    simulation.outputs.append(output)
-    archive.data = simulation
-
-    normalizer = ResultsNormalizer()
-    normalizer.normalize(archive, LOGGER)
-
-    electronic = archive.results.properties.electronic
-    assert electronic is None or not electronic.band_structure_electronic
-
-
-def test_data_schema_propagates_reference_energy_to_legacy_electronic_sections():
-    """Normalization scope: propagate HOE reference to BS/DOS compatibility payloads."""
+def test_data_schema_keeps_reference_energy_off_legacy_electronic_sections():
+    """Reference energies from data should not create BS/DOS compatibility payloads."""
     archive = EntryArchive(metadata=EntryMetadata())
     archive.results = Results()
     archive.results.properties = Properties()
@@ -1000,20 +805,14 @@ def test_data_schema_propagates_reference_energy_to_legacy_electronic_sections()
 
     electronic = archive.results.properties.electronic
     assert electronic is not None
-
-    assert electronic.band_structure_electronic
-    bs = electronic.band_structure_electronic[0]
-    assert bs.band_gap
-    assert bs.band_gap[0].energy_highest_occupied is not None
-
-    assert electronic.dos_electronic
-    dos_compat = electronic.dos_electronic[0]
-    assert dos_compat.band_gap
-    assert dos_compat.band_gap[0].energy_highest_occupied is not None
+    assert electronic.band_gap
+    assert not electronic.band_structure_electronic
+    assert not electronic.dos_electronic
+    assert len(getattr(archive, 'run', None) or []) == 0
 
 
-def test_data_schema_populates_deprecated_dos_mapping():
-    """Data-schema DOS mapping writes deprecated dos_electronic compatibility mirror."""
+def test_data_schema_does_not_map_dos_to_deprecated_results():
+    """Data-schema DOS should not create deprecated dos_electronic results."""
     archive = EntryArchive(metadata=EntryMetadata())
     archive.results = Results()
     archive.results.properties = Properties()
@@ -1053,88 +852,13 @@ def test_data_schema_populates_deprecated_dos_mapping():
     normalizer.normalize(archive, LOGGER)
 
     electronic = archive.results.properties.electronic
-    if HAS_RUNSCHEMA:
-        assert electronic is not None
-        assert not electronic.dos_electronic_new
-        assert electronic.dos_electronic
-        assert len(getattr(archive, 'run', None) or []) == 1
-        assert len(getattr(archive.run[0], 'calculation', None) or []) == 1
-        assert (
-            len(getattr(archive.run[0].calculation[0], 'dos_electronic', None) or [])
-            == 1
-        )
-    else:
-        assert electronic is None or not electronic.dos_electronic_new
-        assert electronic is None or not electronic.dos_electronic
-        assert len(getattr(archive, 'run', None) or []) == 0
-
-
-def test_data_schema_populates_deprecated_dos_with_references():
-    """Deprecated dos_electronic should point to run/calculation compatibility refs."""
-    archive = EntryArchive(metadata=EntryMetadata())
-    archive.results = Results()
-    archive.results.properties = Properties()
-
-    simulation = Simulation()
-    simulation.program = Program(name='VASP')
-    simulation.model_method.append(DFT())
-
-    model_system = ModelSystem(
-        name='test_system',
-        type='bulk',
-        is_representative=True,
-        positions=np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]]) * ureg.angstrom,
-        n_particles=2,
-    )
-    model_system.particle_states.append(
-        AtomsState(chemical_symbol='Si', atomic_number=14)
-    )
-    model_system.particle_states.append(
-        AtomsState(chemical_symbol='Si', atomic_number=14)
-    )
-    model_system.lattice_vectors = np.eye(3) * 5.43 * ureg.angstrom
-    model_system.periodic_boundary_conditions = [True, True, True]
-    simulation.model_system.append(model_system)
-
-    output = Outputs()
-    dos = ElectronicDensityOfStates(
-        value=np.array([0.1, 0.2, 0.3]) / ureg.eV,
-        spin_channel=0,
-    )
-    dos.energies = Energy2(points=np.array([-1.0, 0.0, 1.0]) * ureg.eV)
-    output.electronic_dos.append(dos)
-    simulation.outputs.append(output)
-    archive.data = simulation
-
-    normalizer = ResultsNormalizer()
-    normalizer.normalize(archive, LOGGER)
-
-    electronic = archive.results.properties.electronic
-    assert electronic is not None
-    assert not electronic.dos_electronic_new
-    assert electronic.dos_electronic
-
-    serialized = archive.m_to_dict()
-    dos_sections = (
-        serialized.get('results', {})
-        .get('properties', {})
-        .get('electronic', {})
-        .get('dos_electronic', [])
-    )
-    assert dos_sections
-    dos_ref = dos_sections[0]
-    assert dos_ref.get('energies')
-    assert dos_ref['energies'].startswith('/run/0/calculation/0/dos_electronic/')
-    assert dos_ref.get('total')
-    assert all(
-        ref.startswith('/run/0/calculation/0/dos_electronic/')
-        for ref in dos_ref['total']
-    )
-    assert len(getattr(archive, 'run', None) or []) == 1
+    assert electronic is None or not electronic.dos_electronic_new
+    assert electronic is None or not electronic.dos_electronic
+    assert len(getattr(archive, 'run', None) or []) == 0
 
 
 def test_data_schema_replaces_malformed_existing_dos_entries():
-    """Data-schema DOS mapping should replace stale malformed DOS references."""
+    """Malformed stale generated DOS references should be removed, not replaced."""
     archive = EntryArchive(metadata=EntryMetadata())
     archive.results = Results()
     archive.results.properties = Properties()
@@ -1187,10 +911,8 @@ def test_data_schema_replaces_malformed_existing_dos_entries():
         .get('electronic', {})
         .get('dos_electronic', [])
     )
-    assert dos_sections
-    assert len(dos_sections) == 1
-    assert dos_sections[0].get('energies')
-    assert dos_sections[0].get('total')
+    assert not dos_sections
+    assert len(getattr(archive, 'run', None) or []) == 0
 
 
 def test_data_schema_drops_malformed_stale_dos_without_new_electronic_payload():
@@ -1318,11 +1040,7 @@ def test_data_schema_logs_trajectory_dropped_without_physical_time(
 def test_data_schema_keeps_each_method_on_the_representative_system(
     archive_with_data_schema,
 ):
-    """DFT and GW results on one system are legacy-equivalent side-by-side data.
-
-    Legacy `get_gw_workflow_properties` publishes both, labelled; this path
-    must not collapse them onto whichever output happens to come last.
-    """
+    """DFT and GW band gaps on one system should stay side-by-side."""
     simulation = archive_with_data_schema.data
     system = simulation.model_system[0]
     dft = DFT()
@@ -1330,24 +1048,20 @@ def test_data_schema_keeps_each_method_on_the_representative_system(
     simulation.model_method.extend([dft, gw])
 
     dft_output = Outputs(model_system_ref=system, model_method_ref=dft)
-    dos = ElectronicDensityOfStates(value=np.array([0.1, 0.2]) / ureg.eV)
-    dos.energies = Energy2(points=np.array([-1.0, 1.0]) * ureg.eV)
-    dft_output.electronic_dos.append(dos)
+    dft_output.electronic_band_gaps.append(ElectronicBandGap(value=1.0 * ureg.eV))
     simulation.outputs.append(dft_output)
 
     gw_output = Outputs(model_system_ref=system, model_method_ref=gw)
-    band_structure = ElectronicBandStructure(value=np.array([[1.0], [1.1]]) * ureg.eV)
-    band_structure.k_path = _kline_path()
-    gw_output.electronic_band_structures.append(band_structure)
+    gw_output.electronic_band_gaps.append(ElectronicBandGap(value=2.0 * ureg.eV))
     simulation.outputs.append(gw_output)
 
     ResultsNormalizer().normalize(archive_with_data_schema, LOGGER)
 
     electronic = archive_with_data_schema.results.properties.electronic
-    assert [
-        band_structure.label for band_structure in electronic.band_structure_electronic
-    ] == ['GW']
-    assert [dos.label for dos in electronic.dos_electronic] == ['DFT']
+    assert [gap.value.to('eV').magnitude for gap in electronic.band_gap] == [1.0, 2.0]
+    assert not electronic.dos_electronic
+    assert not electronic.band_structure_electronic
+    assert len(getattr(archive_with_data_schema, 'run', None) or []) == 0
 
 
 def test_data_schema_drops_outputs_from_non_representative_systems(
@@ -1383,11 +1097,10 @@ def test_data_schema_drops_outputs_from_non_representative_systems(
     )
 
 
-@pytest.mark.skipif(not HAS_RUNSCHEMA, reason='requires runschema')
-def test_data_schema_gives_each_method_its_own_legacy_dos_references(
+def test_data_schema_does_not_create_per_method_legacy_dos_references(
     archive_with_data_schema,
 ):
-    """Per-method DOS payloads must not overwrite each other's run references."""
+    """Per-method DOS payloads should no longer create legacy run references."""
     simulation = archive_with_data_schema.data
     system = simulation.model_system[0]
     dft = DFT()
@@ -1404,15 +1117,12 @@ def test_data_schema_gives_each_method_its_own_legacy_dos_references(
     ResultsNormalizer().normalize(archive_with_data_schema, LOGGER)
 
     serialized = archive_with_data_schema.m_to_dict()
-    dos_sections = serialized['results']['properties']['electronic']['dos_electronic']
-    assert [section['label'] for section in dos_sections] == ['DFT', 'GW']
-
-    references = [section['energies'] for section in dos_sections]
-    references += [ref for section in dos_sections for ref in section['total']]
-    assert len(set(references)) == len(references)
-    assert all(
-        archive_with_data_schema.m_resolve(reference) is not None
-        for reference in references
+    assert not serialized.get('run')
+    assert not (
+        serialized.get('results', {})
+        .get('properties', {})
+        .get('electronic', {})
+        .get('dos_electronic', [])
     )
 
 
@@ -1475,32 +1185,22 @@ def test_data_schema_preserves_legacy_calculation_and_result_sections():
     assert archive.run[0] is legacy_run
     assert legacy_calculation.dos_electronic[0] is legacy_dos
     assert legacy_calculation.band_structure_electronic[0] is legacy_band_structure
-    # The generated run is identified by annotation alone; no user-facing
-    # quantity is claimed to mark it.
-    assert archive.run[1].raw_id is None
-    assert DATA_SCHEMA_COMPATIBILITY_ANNOTATION in archive.run[1].m_annotations
+    assert len(archive.run) == 1
     assert any(section.label == 'parser-owned' for section in electronic.dos_electronic)
     assert any(
         section.label == 'parser-owned'
         for section in electronic.band_structure_electronic
     )
     assert any(gap.value.to('eV').magnitude == 9.0 for gap in electronic.band_gap)
+    assert any(gap.value.to('eV').magnitude == 1.0 for gap in electronic.band_gap)
 
     serialized = archive.m_to_dict()
-    generated_dos = next(
-        section
-        for section in serialized['results']['properties']['electronic'][
-            'dos_electronic'
-        ]
-        if DATA_SCHEMA_COMPATIBILITY_ANNOTATION in section.get('m_annotations', {})
+    dos_sections = serialized['results']['properties']['electronic']['dos_electronic']
+    assert len(dos_sections) == 1
+    assert (
+        DATA_SCHEMA_COMPATIBILITY_ANNOTATION
+        not in dos_sections[0].get('m_annotations', {})
     )
-    assert generated_dos.get('label') is None
-    assert generated_dos['energies'].startswith('/run/1/calculation/0/')
-    assert all(
-        ref.startswith('/run/1/calculation/0/') for ref in generated_dos['total']
-    )
-    assert archive.m_resolve(generated_dos['energies']) is not None
-    assert all(archive.m_resolve(ref) is not None for ref in generated_dos['total'])
 
 
 def test_data_schema_output_mapping_is_idempotent(archive_with_data_schema):
@@ -1546,57 +1246,6 @@ def test_data_schema_output_mapping_is_idempotent(archive_with_data_schema):
     )
 
 
-def test_greens_mapping_does_not_create_axis_only_result():
-    if 'tau' not in GreensFunctionsElectronic.m_def.all_quantities:
-        pytest.skip('legacy Green functions fields unavailable')
-
-    greens = SimpleNamespace(
-        imaginary_time=None,
-        matsubara_frequency=None,
-        real_frequency=Frequency(points=np.array([0.0, 1.0]) * ureg.eV),
-        value=np.array([1.0 + 1.0j, 2.0 + 1.0j]) / ureg.eV,
-    )
-    output = SimpleNamespace(
-        electronic_greens_functions=[greens],
-        electronic_self_energies=[],
-        hybridization_functions=[],
-        quasiparticle_weights=[],
-        chemical_potentials=[],
-    )
-    normalizer = ResultsNormalizer()
-    normalizer.logger = LOGGER
-
-    assert normalizer._map_greens_functions(output) is None
-
-
-def test_greens_mapping_recovers_from_incompatible_payload_shape(caplog):
-    if 'tau' not in GreensFunctionsElectronic.m_def.all_quantities:
-        pytest.skip('legacy Green functions fields unavailable')
-
-    greens = SimpleNamespace(
-        imaginary_time=ImaginaryTime(points=np.array([0.0, 1.0]) * ureg.s),
-        matsubara_frequency=None,
-        real_frequency=None,
-        value=np.array([1.0, 2.0]) / ureg.eV,
-    )
-    output = SimpleNamespace(
-        electronic_greens_functions=[greens],
-        electronic_self_energies=[],
-        hybridization_functions=[],
-        quasiparticle_weights=[],
-        chemical_potentials=[],
-    )
-    normalizer = ResultsNormalizer()
-    normalizer.logger = LOGGER
-
-    caplog.clear()
-    assert normalizer._map_greens_functions(output) is None
-    assert any(
-        'skipping incompatible greens axis/payload pair' in record.message
-        for record in caplog.records
-    )
-
-
 def test_data_schema_logs_unmapped_output_groups(archive_with_data_schema, caplog):
     """Unsupported outputs should stay unset and produce a TODO log."""
     output = Outputs()
@@ -1616,10 +1265,10 @@ def test_data_schema_logs_unmapped_output_groups(archive_with_data_schema, caplo
     assert properties.dynamical is None
 
 
-def test_data_schema_skips_dos_cleanly_without_runschema(
-    archive_with_data_schema, caplog
+def test_data_schema_skips_dos_without_legacy_compatibility_run(
+    archive_with_data_schema,
 ):
-    """DOS mapping should skip cleanly when runschema-based payload cannot be built."""
+    """DOS-only outputs should not create electronic results or run sections."""
     output = Outputs()
     dos = ElectronicDensityOfStates(
         value=np.array([0.1, 0.2, 0.3]) / ureg.eV,
@@ -1630,27 +1279,17 @@ def test_data_schema_skips_dos_cleanly_without_runschema(
     archive_with_data_schema.data.outputs.append(output)
 
     normalizer = ResultsNormalizer()
-    caplog.clear()
     normalizer.normalize(archive_with_data_schema, LOGGER)
 
     properties = archive_with_data_schema.results.properties
     electronic = properties.electronic
-    if HAS_RUNSCHEMA:
-        assert electronic is not None
-        assert electronic.dos_electronic
-        assert not electronic.dos_electronic_new
-        assert len(getattr(archive_with_data_schema, 'run', None) or []) == 1
-    else:
-        assert electronic is None or not electronic.dos_electronic_new
-        assert (
-            'Skipping DOS mapping for results.properties.electronic.dos_electronic'
-            in caplog.text
-        )
-        assert len(getattr(archive_with_data_schema, 'run', None) or []) == 0
+    assert electronic is None or not electronic.dos_electronic_new
+    assert electronic is None or not electronic.dos_electronic
+    assert len(getattr(archive_with_data_schema, 'run', None) or []) == 0
 
 
-def test_data_schema_priority_over_run(archive_with_data_schema):
-    """Test that data schema takes priority when both schemas present."""
+def test_data_schema_runs_after_legacy_run(archive_with_data_schema):
+    """Data-schema normalization should run after legacy run normalization."""
     # Add a mock run section to the data schema archive
     from nomad.datamodel.data import ArchiveSection
 
@@ -1661,11 +1300,28 @@ def test_data_schema_priority_over_run(archive_with_data_schema):
 
     normalizer = ResultsNormalizer()
 
-    # Run normalization (should use data schema path, not run)
     normalizer.normalize(archive_with_data_schema, LOGGER)
 
-    # Should succeed without delegating to legacy normalizer
     assert archive_with_data_schema.results is not None
+
+
+def test_data_schema_runs_plugin_path(archive_with_data_schema, monkeypatch):
+    calls = []
+
+    def method(self, archive):
+        calls.append('method')
+
+    def outputs(self, archive):
+        calls.append('outputs')
+
+    monkeypatch.setattr(ResultsNormalizer, '_normalize_method_with_data_schema', method)
+    monkeypatch.setattr(
+        ResultsNormalizer, '_normalize_outputs_with_data_schema', outputs
+    )
+
+    ResultsNormalizer().normalize(archive_with_data_schema, LOGGER)
+
+    assert calls == ['method', 'outputs']
 
 
 def test_data_schema_maps_geometry_optimization_workflow(archive_with_data_schema):
@@ -1798,6 +1454,7 @@ def test_data_schema_merges_electronic_payload_split_across_outputs(
     representative = archive_with_data_schema.data.model_system[0]
 
     output_bs = Outputs(model_system_ref=representative)
+    output_bs.electronic_band_gaps.append(ElectronicBandGap(value=1.0 * ureg.eV))
     output_bs.electronic_band_structures.append(
         ElectronicBandStructure(
             value=np.array([[0.0, 1.0], [0.1, 1.1]]) * ureg.eV,
@@ -1823,15 +1480,16 @@ def test_data_schema_merges_electronic_payload_split_across_outputs(
 
     electronic = archive_with_data_schema.results.properties.electronic
     assert electronic is not None
-    assert electronic.band_structure_electronic
-    if HAS_RUNSCHEMA:
-        assert electronic.dos_electronic
+    assert electronic.band_gap
+    assert not electronic.band_structure_electronic
+    assert not electronic.dos_electronic
+    assert len(getattr(archive_with_data_schema, 'run', None) or []) == 0
 
 
-def test_normalize_with_data_schema_calls_topology_normalizer(
+def test_data_schema_normalize_calls_topology_normalizer(
     archive_with_data_schema, monkeypatch
 ):
-    """Test that _normalize_with_data_schema calls TopologyNormalizer."""
+    """Test that the data-schema normalize path calls TopologyNormalizer."""
     from nomad_results_normalizer.normalizers.topology import TopologyNormalizer
 
     # Track if TopologyNormalizer.normalize was called
@@ -1851,31 +1509,6 @@ def test_normalize_with_data_schema_calls_topology_normalizer(
 
     # Verify TopologyNormalizer.normalize was called
     assert len(normalize_called) > 0, 'TopologyNormalizer.normalize should be called'
-
-
-def test_legacy_path_delegates_to_nomad_fair_results_normalizer(
-    archive_empty, monkeypatch
-):
-    """Legacy fallback should delegate to nomad-FAIR ResultsNormalizer."""
-    from nomad.normalizing.results import ResultsNormalizer as LegacyResultsNormalizer
-
-    called = []
-    original_normalize = LegacyResultsNormalizer.normalize
-
-    def mock_normalize(self, archive, logger=None):
-        called.append(True)
-        return original_normalize(self, archive, logger)
-
-    monkeypatch.setattr(LegacyResultsNormalizer, 'normalize', mock_normalize)
-
-    normalizer = ResultsNormalizer()
-    try:
-        normalizer.normalize(archive_empty, LOGGER)
-    except Exception:
-        # Legacy normalize may fail in minimal fixture; delegation is what matters.
-        pass
-
-    assert called, 'Legacy ResultsNormalizer.normalize should be delegated to'
 
 
 def test_normalize_measurements_still_works(archive_with_data_schema):
